@@ -210,6 +210,7 @@ def new_state(event: dict[str, Any]) -> dict[str, Any]:
         "prompt_count": 0,
         "files_touched": [],
         "turn_files_touched": [],
+        "turn_shell_scopes": {},
         "fingerprint_cache": {},
         "verifications": [],
     }
@@ -312,6 +313,7 @@ def load_config(cwd: Path) -> tuple[dict[str, Any], list[str]]:
         config["verification_commands"] = []
     else:
         valid_commands: list[dict[str, Any]] = []
+        seen_command_ids: set[str] = set()
         for index, item in enumerate(commands):
             if not isinstance(item, dict) or item.get("kind") not in VERIFICATION_KINDS:
                 warnings.append(f"verification_commands[{index}] has an invalid kind or shape and was ignored.")
@@ -335,8 +337,15 @@ def load_config(cwd: Path) -> tuple[dict[str, Any], list[str]]:
                 except re.error as exc:
                     warnings.append(f"verification_commands[{index}] has an invalid pattern ({exc}) and was ignored.")
                     continue
+            identifier = item.get("id") if isinstance(item.get("id"), str) and item["id"] else f"custom-{index + 1}"
+            if identifier in seen_command_ids:
+                warnings.append(
+                    f"verification_commands[{index}] has duplicate id {identifier!r} and was ignored."
+                )
+                continue
+            seen_command_ids.add(identifier)
             rule: dict[str, Any] = {
-                "id": item.get("id") if isinstance(item.get("id"), str) and item["id"] else f"custom-{index + 1}",
+                "id": identifier,
                 "kind": item["kind"],
                 selectors[0]: item[selectors[0]],
                 "required": item.get("required", False),
@@ -780,10 +789,64 @@ def git_workspace_snapshot(cwd: Path) -> dict[str, Any] | None:
     config, _ = load_config(root)
     paths = [path for path in changed_paths(root) if not ignored(path, config["ignore_paths"])]
     fingerprint = workspace_fingerprint_details(root, paths, config)
+    path_states: dict[str, str] = {}
+    for path in paths:
+        target = project_path(root, path)
+        if target is None:
+            path_states[path] = "outside-root"
+        elif target.is_symlink():
+            try:
+                path_states[path] = "symlink:" + hashlib.sha256(os.readlink(target).encode()).hexdigest()
+            except OSError:
+                path_states[path] = "symlink-unreadable"
+        elif target.is_file():
+            path_states[path] = "file:" + str(file_sha256(target) or "unreadable")
+        else:
+            path_states[path] = "deleted-or-unreadable"
     return {
         "root": str(root.resolve(strict=False)),
         "fingerprint": fingerprint["fingerprint"],
+        "path_states": path_states,
     }
+
+
+def snapshot_changed_paths(
+    baseline: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> list[str]:
+    """Return currently dirty paths whose content changed since a prompt snapshot."""
+    if not isinstance(baseline, dict) or not isinstance(current, dict):
+        return []
+    if baseline.get("root") != current.get("root"):
+        return []
+    before = baseline.get("path_states")
+    after = current.get("path_states")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    return sorted(
+        path for path, value in after.items()
+        if isinstance(path, str) and before.get(path) != value
+    )
+
+
+def recently_modified_dirty_paths(cwd: Path, since_ns: int) -> list[str]:
+    """Best-effort discovery for a shell-operated Git scope without a prompt baseline."""
+    root = repo_root(cwd)
+    if root is None:
+        return []
+    config, _ = load_config(root)
+    recent: list[str] = []
+    for path in changed_paths(root):
+        if ignored(path, config["ignore_paths"]):
+            continue
+        target = project_path(root, path)
+        try:
+            modified_ns = target.stat().st_mtime_ns if target is not None else 0
+        except OSError:
+            modified_ns = 0
+        if modified_ns >= since_ns:
+            recent.append(path)
+    return sorted(recent)
 
 
 def recent_verifications(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -816,12 +879,35 @@ def determine_turn_scope(cwd: Path, state: dict[str, Any]) -> dict[str, Any]:
             grouped.items(), key=lambda item: (len(item[1]), item[0][1])
         )
         root = Path(root_text)
-        protected = sorted({
-            scope_path(root, target)
-            for values in grouped.values()
-            for target in values
-        })
-        return {"active": True, "kind": kind, "root": root, "paths": protected}
+        protected = {scope_path(root, target) for target in primary_paths}
+        baseline = state.get("turn_git_baseline")
+        if kind == "git" and isinstance(baseline, dict) and baseline.get("root") == root_text:
+            protected.update(snapshot_changed_paths(baseline, git_workspace_snapshot(root)))
+        shell_scopes = state.get("turn_shell_scopes", {})
+        if isinstance(shell_scopes, dict):
+            shell_scope = shell_scopes.get(root_text)
+            if isinstance(shell_scope, dict):
+                protected.update(
+                    path for path in shell_scope.get("paths", []) if isinstance(path, str)
+                )
+        other_scopes = sorted(
+            scope_root for _, scope_root in grouped if scope_root != root_text
+        )
+        if isinstance(shell_scopes, dict):
+            other_scopes.extend(
+                scope_root for scope_root, value in shell_scopes.items()
+                if scope_root != root_text
+                and isinstance(value, dict)
+                and value.get("paths")
+                and scope_root not in other_scopes
+            )
+        return {
+            "active": True,
+            "kind": kind,
+            "root": root,
+            "paths": sorted(protected),
+            "other_scopes": sorted(other_scopes),
+        }
 
     latest = recent_verifications(state)
     if latest:
@@ -837,11 +923,33 @@ def determine_turn_scope(cwd: Path, state: dict[str, Any]) -> dict[str, Any]:
     baseline = state.get("turn_git_baseline")
     current = git_workspace_snapshot(cwd)
     if isinstance(baseline, dict) and current is not None:
-        if baseline.get("root") == current.get("root") and baseline.get("fingerprint") != current.get("fingerprint"):
+        delta = snapshot_changed_paths(baseline, current)
+        if baseline.get("root") == current.get("root") and delta:
             root = Path(str(current["root"]))
-            config, _ = load_config(root)
-            paths = [path for path in changed_paths(root) if not ignored(path, config["ignore_paths"])]
-            return {"active": True, "kind": "git", "root": root, "paths": paths}
+            return {"active": True, "kind": "git", "root": root, "paths": delta}
+
+    shell_scopes = state.get("turn_shell_scopes", {})
+    if isinstance(shell_scopes, dict):
+        active_shell_scopes = [
+            (root_text, value) for root_text, value in shell_scopes.items()
+            if isinstance(value, dict) and value.get("paths")
+        ]
+        if active_shell_scopes:
+            root_text, value = max(
+                active_shell_scopes,
+                key=lambda item: (len(item[1].get("paths", [])), item[0]),
+            )
+            return {
+                "active": True,
+                "kind": str(value.get("kind") or "git"),
+                "root": Path(root_text),
+                "paths": sorted(set(value.get("paths", []))),
+                "other_scopes": sorted(
+                    other_root for other_root, _ in active_shell_scopes
+                    if other_root != root_text
+                ),
+                "baseline_missing": True,
+            }
 
     # Older sessions and direct unit tests may not contain a prompt boundary.
     if not has_turn_boundary:
@@ -914,6 +1022,65 @@ def command_matches_rule(
     return False
 
 
+def builtin_verification_forms(argv: list[str]) -> list[str]:
+    """Return safe normalized forms for common wrapper and monorepo invocations."""
+    forms: list[list[str]] = [list(argv)]
+    values = list(argv)
+    if values and values[0] in {"sudo", "time", "nice"} and len(values) > 1:
+        values = values[1:]
+        forms.append(list(values))
+
+    if values and values[0] in {"make", "just"}:
+        simplified = [values[0]]
+        index = 1
+        while index < len(values):
+            if values[index] in {"-C", "--directory"} and index + 1 < len(values):
+                index += 2
+                continue
+            simplified.append(values[index])
+            index += 1
+        forms.append(simplified)
+
+    if values and values[0] in {"npm", "pnpm", "yarn", "bun"}:
+        if values[0] == "yarn" and len(values) >= 4 and values[1] == "workspace":
+            forms.append(["yarn", *values[3:]])
+        simplified = [values[0]]
+        index = 1
+        option_values = {"--prefix", "--filter", "-C", "--dir", "--cwd"}
+        while index < len(values):
+            if values[index] in option_values and index + 1 < len(values):
+                index += 2
+                continue
+            if any(values[index].startswith(option + "=") for option in option_values if option.startswith("--")):
+                index += 1
+                continue
+            simplified.append(values[index])
+            index += 1
+        forms.append(simplified)
+
+    if len(values) >= 3 and values[:2] in (["uv", "run"], ["poetry", "run"], ["pipenv", "run"]):
+        simplified = values[:2]
+        index = 2
+        option_values = {"--project", "--directory", "--python"}
+        while index < len(values):
+            if values[index] in option_values and index + 1 < len(values):
+                index += 2
+                continue
+            if any(values[index].startswith(option + "=") for option in option_values):
+                index += 1
+                continue
+            simplified.extend(values[index:])
+            break
+        forms.append(simplified)
+
+    rendered: list[str] = []
+    for form in forms:
+        text = " ".join(form)
+        if text and text not in rendered:
+            rendered.append(text)
+    return rendered
+
+
 def rule_fingerprint(rule: dict[str, Any]) -> str:
     payload = json.dumps(rule, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(payload.encode()).hexdigest()
@@ -936,16 +1103,16 @@ def match_verification(
             return item
     if structured_candidate:
         return None
-    normalized = " ".join(str(value) for value in parsed["argv"])
-    for kind, pattern in VERIFY_PATTERNS:
-        if pattern.search(normalized):
-            return {
-                "id": f"builtin-{kind}",
-                "kind": kind,
-                "required": False,
-                "covers": [],
-                "artifacts": [],
-            }
+    for normalized in builtin_verification_forms(list(parsed["argv"])):
+        for kind, pattern in VERIFY_PATTERNS:
+            if pattern.search(normalized):
+                return {
+                    "id": f"builtin-{kind}",
+                    "kind": kind,
+                    "required": False,
+                    "covers": [],
+                    "artifacts": [],
+                }
     return None
 
 
@@ -962,13 +1129,28 @@ def redact_command(command: str) -> str:
     """Remove common inline secrets before persisting a command."""
     normalized = " ".join(command.split())
     normalized = re.sub(
+        r"(?<![-\w])([A-Za-z_][A-Za-z0-9_]*)=(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+        lambda match: f"{match.group(1)}=<redacted>",
+        normalized,
+    )
+    normalized = re.sub(
         r"(?i)\b([A-Z_][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH)[A-Z0-9_]*)=(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
         lambda match: f"{match.group(1)}=<redacted>",
         normalized,
     )
     normalized = re.sub(
-        r"(?i)(--(?:token|secret|password|passwd|api-key|authorization))(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+        r"(?i)(--(?:token|secret|password|passwd|api-key|authorization|dsn|database-url|connection-string))(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
         lambda match: f"{match.group(1)}=<redacted>",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@",
+        r"\1<redacted>@",
+        normalized,
+    )
+    normalized = re.sub(
+        r"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^'\"\s]+",
+        r"\1<redacted>",
         normalized,
     )
     return normalized[:500]
@@ -1101,12 +1283,18 @@ def extract_exit_code(value: Any) -> int | None:
             if found is not None:
                 return found
     elif isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = None
+        if isinstance(decoded, (dict, list)):
+            return extract_exit_code(decoded)
         patterns = [
-            r"(?:exit(?:ed)?(?: with)?(?: code| status)?|exit_code)\D{0,8}(-?\d+)",
-            r"Process completed with code\s+(-?\d+)",
+            r"\s*(?:Process\s+)?(?:exited|completed)(?:\s+with)?\s+(?:code|status)\s+(-?\d+)\s*",
+            r"\s*exit_code\s*[:=]\s*(-?\d+)\s*",
         ]
         for pattern in patterns:
-            match = re.search(pattern, value, re.IGNORECASE)
+            match = re.fullmatch(pattern, value, re.IGNORECASE)
             if match:
                 return int(match.group(1))
     return None
@@ -1488,8 +1676,8 @@ def untracked_paths(cwd: Path) -> set[str]:
 
 
 def added_debug_markers(cwd: Path, paths: list[str], config: dict[str, Any]) -> dict[str, Any]:
-    root = repo_root(cwd)
-    if root is None or not paths:
+    root = repo_root(cwd) or guard_root(cwd)
+    if not paths:
         return {"warnings": [], "blockers": [], "scan": {"complete": True, "files": []}}
     debug_config = config.get("debug_markers", DEFAULT_CONFIG["debug_markers"])
     ignored_paths = list(config.get("debug_marker_ignore_paths", [])) + list(debug_config.get("ignore_paths", []))
@@ -1800,9 +1988,22 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
         return None
     cwd = Path(scope["root"])
     scope_kind = str(scope["kind"])
+    raw_paths = [path for path in scope["paths"] if isinstance(path, str)]
     config, config_warnings = runtime_config(cwd, scope_kind)
+    config_changed = ".doneguard.json" in raw_paths
+    baselines = state.get("turn_config_baselines", {})
+    baseline_entry = baselines.get(str(cwd.resolve(strict=False))) if isinstance(baselines, dict) else None
+    if config_changed and isinstance(baseline_entry, dict):
+        baseline_config = baseline_entry.get("config")
+        baseline_warnings = baseline_entry.get("warnings")
+        if isinstance(baseline_config, dict):
+            config = baseline_config
+            config_warnings = list(baseline_warnings) if isinstance(baseline_warnings, list) else []
+            config_warnings.append(
+                "DoneGuard configuration changed during this turn; the policy captured at prompt start was used"
+            )
     all_paths = sorted({
-        path for path in scope["paths"]
+        path for path in raw_paths
         if not ignored(path, config["ignore_paths"])
     })
     code_paths = [path for path in all_paths if code_changed([path])]
@@ -1846,6 +2047,19 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
     blockers: list[str] = []
     warnings = list(config_warnings)
     passed: list[str] = []
+
+    other_scopes = [
+        value for value in scope.get("other_scopes", []) if isinstance(value, str)
+    ]
+    if other_scopes:
+        blockers.append(
+            "multiple protected scopes changed in one turn; verification evidence must be evaluated separately for: "
+            + ", ".join(other_scopes[:5])
+        )
+    if scope.get("baseline_missing"):
+        warnings.append(
+            "a shell-operated repository had no prompt-start baseline; recently modified dirty paths were inspected conservatively"
+        )
 
     if not fingerprint_complete:
         warnings.append(
@@ -2244,9 +2458,22 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
     if hook_name == "UserPromptSubmit":
         state["prompt_count"] = int(state.get("prompt_count") or 0) + 1
         state["turn_started_sequence"] = state["sequence"]
+        state["turn_started_ns"] = time.time_ns()
         state["turn_files_touched"] = []
+        state["turn_shell_scopes"] = {}
         cwd = Path(str(event.get("cwd") or state.get("cwd") or os.getcwd())).resolve()
         state["turn_git_baseline"] = git_workspace_snapshot(cwd)
+        root = guard_root(cwd).resolve(strict=False)
+        kind = "git" if repo_root(root) is not None else (
+            "global" if managed_global_root(root) is not None else "configured"
+        )
+        baseline_config, baseline_warnings = runtime_config(root, kind)
+        state["turn_config_baselines"] = {
+            str(root): {
+                "config": baseline_config,
+                "warnings": baseline_warnings,
+            }
+        }
         state.pop("last_prompt", None)
         save_json(path, state)
         return None
@@ -2265,6 +2492,25 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
             state["last_change_sequence"] = state["sequence"]
         elif tool_name == "Bash":
             cwd = event_working_directory(event, state.get("cwd") or os.getcwd())
+            shell_owner = scope_for_path(cwd)
+            if shell_owner is not None and shell_owner[0] == "git":
+                shell_kind, shell_root = shell_owner
+                baseline = state.get("turn_git_baseline")
+                current = git_workspace_snapshot(shell_root)
+                if isinstance(baseline, dict) and baseline.get("root") == str(shell_root):
+                    shell_paths = snapshot_changed_paths(baseline, current)
+                else:
+                    shell_paths = recently_modified_dirty_paths(
+                        shell_root,
+                        int(state.get("turn_started_ns") or 0),
+                    )
+                shell_scopes = state.setdefault("turn_shell_scopes", {})
+                shell_key = str(shell_root.resolve(strict=False))
+                prior = shell_scopes.get(shell_key, {})
+                shell_scopes[shell_key] = {
+                    "kind": shell_kind,
+                    "paths": sorted(set(prior.get("paths", [])) | set(shell_paths)),
+                }
             scope = determine_turn_scope(cwd, state)
             if scope["active"]:
                 scope_root = Path(scope["root"])

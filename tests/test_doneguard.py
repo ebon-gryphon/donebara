@@ -811,6 +811,174 @@ class DoneGuardTests(unittest.TestCase):
         message = doneguard.handle_hook(self.event("Stop"))["systemMessage"]
         self.assertIn("发现不允许保留的调试内容", message)
 
+    def test_shell_generated_new_code_after_patch_invalidates_evidence(self) -> None:
+        self.start_and_edit()
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "pytest -q", "workdir": str(self.repo)},
+            tool_response={"exit_code": 0},
+        ))
+        (self.repo / "generated.py").write_text("BROKEN = True\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "python3 generator.py", "workdir": str(self.repo)},
+            tool_response={"exit_code": 0},
+        ))
+        message = doneguard.handle_hook(self.event("Stop"))["systemMessage"]
+        report = doneguard.latest_report(self.repo)
+        self.assertIn("generated.py", report["changed_paths"])
+        self.assertIn("evidence is stale", message)
+
+    def test_external_shell_only_edit_is_detected(self) -> None:
+        external = self.root / "external-shell"
+        external.mkdir()
+        subprocess.run(["git", "init", "-q", str(external)], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.email", "doneguard@example.test"], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.name", "DoneGuard Test"], check=True)
+        target = external / "tool.py"
+        target.write_text("VALUE = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(external), "add", "tool.py"], check=True)
+        subprocess.run(["git", "-C", str(external), "commit", "-qm", "initial"], check=True)
+
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="rewrite external code"))
+        target.write_text("VALUE = 2\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "python3 rewrite.py", "workdir": str(external)},
+            tool_response={"exit_code": 0},
+        ))
+        result = doneguard.handle_hook(self.event("Stop"))
+        self.assertIn("systemMessage", result)
+        report = doneguard.latest_report(external)
+        self.assertEqual(report["changed_paths"], ["tool.py"])
+        self.assertTrue(report["blockers"])
+
+    def test_multiple_repositories_cannot_share_one_verification(self) -> None:
+        external = self.root / "z-repository"
+        external.mkdir()
+        subprocess.run(["git", "init", "-q", str(external)], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.email", "doneguard@example.test"], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.name", "DoneGuard Test"], check=True)
+        target = external / "tool.py"
+        target.write_text("VALUE = 1\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(external), "add", "tool.py"], check=True)
+        subprocess.run(["git", "-C", str(external), "commit", "-qm", "initial"], check=True)
+
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="edit both repositories"))
+        (self.repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        target.write_text("VALUE = 2\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="apply_patch",
+            tool_input={"command": f"*** Update File: {self.repo / 'app.py'}\n*** Update File: {target}"},
+        ))
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "pytest -q", "workdir": str(external)},
+            tool_response={"exit_code": 0},
+        ))
+        result = doneguard.handle_hook(self.event("Stop"))
+        self.assertIn("systemMessage", result)
+        report = doneguard.latest_report(external)
+        self.assertEqual(report["status"], "issue")
+        self.assertTrue(any("multiple protected scopes" in item for item in report["blockers"]))
+
+    def test_config_cannot_disable_guard_during_same_turn(self) -> None:
+        strict = {
+            "schema_version": 3,
+            "mode": "strict",
+            "verification_commands": [{
+                "id": "required-tests", "kind": "test", "argv": ["pytest"],
+                "required": True, "when_changed": ["app.py"],
+                "fingerprint_paths": ["app.py"],
+            }],
+        }
+        (self.repo / ".doneguard.json").write_text(json.dumps(strict) + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", ".doneguard.json"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "strict config"], check=True)
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="edit and disable guard"))
+        (self.repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        (self.repo / ".doneguard.json").write_text(
+            '{"mode":"observe","require_verification_when_code_changed":false}\n',
+            encoding="utf-8",
+        )
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="apply_patch",
+            tool_input={"command": "*** Update File: app.py\n*** Update File: .doneguard.json"},
+        ))
+        result = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
+        self.assertEqual(result.get("decision"), "block")
+        report = doneguard.latest_report(self.repo)
+        self.assertEqual(report["mode"], "strict")
+        self.assertTrue(any("configuration changed" in item for item in report["warnings"]))
+
+    def test_incidental_exit_text_is_not_treated_as_success(self) -> None:
+        self.start_and_edit()
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "pytest -q"},
+            tool_response={"output": "fixture: expected child exited with code 0"},
+        ))
+        report_result = doneguard.handle_hook(self.event("Stop"))
+        self.assertIn("unknown exit status", report_result["systemMessage"])
+        report = doneguard.latest_report(self.repo)
+        self.assertIsNone(report["verification_evidence"][0]["success"])
+
+    def test_non_git_debug_marker_is_scanned(self) -> None:
+        plain = self.root / "configured-debug"
+        plain.mkdir()
+        (plain / ".doneguard.json").write_text(
+            '{"mode":"warn","require_verification_when_code_changed":false}\n',
+            encoding="utf-8",
+        )
+        doneguard.handle_hook(self.event("SessionStart", cwd=str(plain), source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", cwd=str(plain), prompt="add debug"))
+        (plain / "tool.py").write_text("# TODO remove\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse", cwd=str(plain), tool_name="apply_patch",
+            tool_input={"command": "*** Add File: tool.py"},
+        ))
+        message = doneguard.handle_hook(self.event("Stop", cwd=str(plain)))["systemMessage"]
+        self.assertIn("tool.py:1: TODO/FIXME/HACK", message)
+        self.assertEqual(doneguard.latest_report(plain)["debug_scan"]["files"][0]["path"], "tool.py")
+
+    def test_duplicate_required_rule_ids_are_rejected(self) -> None:
+        config = {
+            "schema_version": 3,
+            "verification_commands": [
+                {"id": "same", "kind": "test", "argv": ["security-test"], "required": True, "when_changed": ["app.py"]},
+                {"id": "same", "kind": "test", "argv": ["npm", "test"], "required": True, "when_changed": ["**"]},
+            ],
+        }
+        (self.repo / ".doneguard.json").write_text(json.dumps(config) + "\n", encoding="utf-8")
+        loaded, warnings = doneguard.load_config(self.repo)
+        self.assertEqual(len(loaded["verification_commands"]), 1)
+        self.assertTrue(any("duplicate id" in item for item in warnings))
+
+    def test_redaction_covers_environment_urls_and_authorization(self) -> None:
+        values = [
+            "DATABASE_URL=postgres://alice:secret@db pytest",
+            "pytest --header 'Authorization: Bearer topsecret'",
+            "pytest --dsn=mysql://bob:hunter2@db/test",
+        ]
+        redacted = "\n".join(doneguard.redact_command(value) for value in values)
+        for secret in ("secret", "topsecret", "hunter2"):
+            self.assertNotIn(secret, redacted)
+
+    def test_common_monorepo_verification_commands_are_recognized(self) -> None:
+        commands = [
+            "make -C backend test",
+            "npm --prefix web test",
+            "pnpm --filter web test",
+            "yarn workspace web test",
+            "uv run --project backend pytest",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(doneguard.classify_verification(command), "test")
+
 
 if __name__ == "__main__":
     unittest.main()
