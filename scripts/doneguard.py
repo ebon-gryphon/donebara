@@ -25,6 +25,7 @@ import subprocess
 import sys
 import time
 import tokenize
+import uuid
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -2238,7 +2239,9 @@ def notification_is_duplicate(report: dict[str, Any]) -> bool:
     if not isinstance(cache, dict):
         return False
     item = cache.get(notification_scope_key(report))
-    return isinstance(item, dict) and item.get("signature") == notification_signature(report)
+    # Legacy entries only proved that `open` succeeded, not that a window appeared.
+    return (isinstance(item, dict) and item.get("delivery_version") == 2
+            and item.get("signature") == notification_signature(report))
 
 
 def record_notification(report: dict[str, Any]) -> None:
@@ -2246,6 +2249,7 @@ def record_notification(report: dict[str, Any]) -> None:
     if not isinstance(cache, dict):
         cache = {}
     cache[notification_scope_key(report)] = {
+        "delivery_version": 2,
         "signature": notification_signature(report),
         "delivered_at": now_iso(),
     }
@@ -2352,8 +2356,17 @@ def save_report(report: dict[str, Any], enqueue: bool = True) -> Path:
     html_path = bundle / "report.html"
     save_json(report_path, report)
     write_text(html_path, report_html(report))
-    save_json(plugin_data_dir() / "events" / f"{report['report_id']}.json", {
+    event_path = plugin_data_dir() / "events" / f"{report['report_id']}.json"
+    previous_event = load_json(event_path, {})
+    token = previous_event.get("delivery_token") or uuid.uuid4().hex
+    # Persist the expected token independently: a running Companion can consume
+    # the queue event before this hook begins waiting for its receipt.
+    save_json(bundle / "delivery-request.json", {
+        "report_id": report["report_id"], "delivery_token": token,
+    })
+    save_json(event_path, {
         "schema_version": 1,
+        "delivery_token": token,
         "report_id": report["report_id"],
         "status": report["status"],
         "project_name": report.get("project_name"),
@@ -2378,12 +2391,36 @@ def launch_companion() -> bool:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=5,
+            timeout=1,
             check=False,
         )
         return completed.returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def deliver_to_companion(report_path: Path, timeout: float = 1.6) -> bool:
+    """Only an AppKit visible-window receipt acknowledges delivery.
+
+    A timeout leaves the durable event queued for the independent Companion
+    poller, and the Stop hook supplies an inline fallback without deduplicating
+    away the unconfirmed popup. No model calls or verification commands run here.
+    """
+    request = load_json(report_path.parent / "delivery-request.json", {})
+    token = request.get("delivery_token")
+    if not token or not launch_companion():
+        return False
+    deadline = time.monotonic() + timeout
+    while True:
+        receipt = load_json(report_path.parent / "delivery.json", {})
+        if (receipt.get("report_id") == report_path.parent.name
+                and receipt.get("delivery_token") == token
+                and receipt.get("state") == "presented"):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.05, remaining))
 
 
 def finalize_report(report_id: str, keep: bool) -> Path | None:
@@ -2574,7 +2611,7 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
         wants_popup = bool(report.get("companion_enabled")) and wants_delivery
         duplicate_notification = wants_delivery and notification_is_duplicate(report)
         companion_available = companion_app_path().exists()
-        save_report(
+        report_path = save_report(
             report,
             enqueue=wants_popup and not duplicate_notification and companion_available,
         )
@@ -2582,7 +2619,7 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
             wants_popup
             and not duplicate_notification
             and companion_available
-            and launch_companion()
+            and deliver_to_companion(report_path)
         )
         if delivered_to_companion:
             record_notification(report)
@@ -2602,6 +2639,9 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
             return None
         if not report["changed_paths"] and not report["warnings"] and not report["blockers"]:
             return None
+        if wants_popup and companion_available:
+            # Do not turn an unacknowledged queued popup into a deduplication hit.
+            return {"systemMessage": message + "\nDoneGuard 尚未收到弹窗显示回执；报告仍在通知队列中，将继续尝试展示。"}
         record_notification(report)
         return {"systemMessage": message}
 

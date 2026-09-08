@@ -5,6 +5,7 @@ extension Notification.Name {
     static let doneGuardShowCompact = Notification.Name("DoneGuardShowCompact")
     static let doneGuardShowDetails = Notification.Name("DoneGuardShowDetails")
     static let doneGuardHide = Notification.Name("DoneGuardHide")
+    static let doneGuardHideDetails = Notification.Name("DoneGuardHideDetails")
 }
 
 struct DisplayCheck: Codable, Equatable, Identifiable {
@@ -150,10 +151,12 @@ struct CompletionReport: Codable, Identifiable, Equatable {
 struct ReportEvent: Codable {
     let reportID: String
     let reportPath: String
+    let deliveryToken: String?
 
     enum CodingKeys: String, CodingKey {
         case reportID = "report_id"
         case reportPath = "report_path"
+        case deliveryToken = "delivery_token"
     }
 }
 
@@ -175,27 +178,41 @@ enum ReportStorage {
 @MainActor
 final class ReportStore: ObservableObject {
     @Published var report: CompletionReport?
-    @Published var showingDetails = false
+    @Published var detailReport: CompletionReport?
     @Published var errorMessage: String?
 
     private(set) var reportPath: URL?
+    private(set) var detailReportPath: URL?
+    private var eventURL: URL?
+    private var deliveryToken: String?
+    private(set) var presentedAt: Date?
     let dataDirectory: URL
+    let minimumDisplayTime: TimeInterval
 
-    init() {
+    init(dataDirectory: URL? = nil, minimumDisplayTime: TimeInterval = 6) {
+        self.minimumDisplayTime = minimumDisplayTime
         let arguments = CommandLine.arguments
-        if let flag = arguments.firstIndex(of: "--data-dir"), arguments.indices.contains(flag + 1) {
-            dataDirectory = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
+        if let dataDirectory {
+            self.dataDirectory = dataDirectory
+        } else if let flag = arguments.firstIndex(of: "--data-dir"), arguments.indices.contains(flag + 1) {
+            self.dataDirectory = URL(fileURLWithPath: arguments[flag + 1], isDirectory: true)
         } else if let configured = ProcessInfo.processInfo.environment["PLUGIN_DATA"], !configured.isEmpty {
-            dataDirectory = URL(fileURLWithPath: configured, isDirectory: true)
+            self.dataDirectory = URL(fileURLWithPath: configured, isDirectory: true)
         } else {
-            dataDirectory = FileManager.default.homeDirectoryForCurrentUser
+            self.dataDirectory = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent(".codex/doneguard-data", isDirectory: true)
         }
-        poll()
     }
 
     func poll() {
-        guard report == nil else { return }
+        if report != nil {
+            guard let presentedAt else {
+                // A hidden window or failed receipt must be retried, not dropped.
+                NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
+                return
+            }
+            if Date().timeIntervalSince(presentedAt) < minimumDisplayTime { return }
+        }
         let events = dataDirectory.appendingPathComponent("events", isDirectory: true)
         guard let candidates = try? FileManager.default.contentsOfDirectory(
             at: events,
@@ -218,38 +235,72 @@ final class ReportStore: ObservableObject {
             let temporaryRoot = dataDirectory
                 .appendingPathComponent("reports/temporary", isDirectory: true)
                 .standardizedFileURL.path + "/"
-            guard candidate.standardizedFileURL.path.hasPrefix(temporaryRoot) else {
+            guard candidate.resolvingSymlinksInPath().path.hasPrefix(
+                URL(fileURLWithPath: temporaryRoot).resolvingSymlinksInPath().path + "/"
+            ) else {
                 throw CocoaError(.fileReadNoPermission)
             }
             let decoded = try JSONDecoder().decode(CompletionReport.self, from: Data(contentsOf: candidate))
             guard decoded.reportID == event.reportID else {
                 throw CocoaError(.fileReadCorruptFile)
             }
-            try? FileManager.default.removeItem(at: eventURL)
+            self.eventURL = eventURL
+            deliveryToken = event.deliveryToken
+            presentedAt = nil
             reportPath = candidate
             report = decoded
-            showingDetails = false
             errorMessage = nil
             NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
         } catch {
             errorMessage = "报告暂时无法打开：\(error.localizedDescription)"
-            try? FileManager.default.removeItem(at: eventURL)
+            // Keep corrupt events for diagnosis, but never let one poison the queue.
+            let failed = events.appendingPathComponent("failed", isDirectory: true)
+            try? FileManager.default.createDirectory(at: failed, withIntermediateDirectories: true)
+            try? FileManager.default.moveItem(at: eventURL, to: failed.appendingPathComponent(UUID().uuidString + ".json"))
             NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
         }
     }
 
+    func acknowledgePresentation(isVisible: Bool) {
+        guard isVisible, presentedAt == nil, let report, let reportPath, let eventURL else { return }
+        do {
+            let receipt: [String: String] = [
+                "report_id": report.reportID,
+                "delivery_token": deliveryToken ?? "legacy",
+                "state": "presented",
+                "presented_at": ISO8601DateFormatter().string(from: Date())
+            ]
+            try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+                .write(to: reportPath.deletingLastPathComponent().appendingPathComponent("delivery.json"), options: .atomic)
+            // Persist the receipt BEFORE consuming the durable event.
+            if FileManager.default.fileExists(atPath: eventURL.path) {
+                let current = try JSONDecoder().decode(ReportEvent.self, from: Data(contentsOf: eventURL))
+                if current.reportID == report.reportID && current.deliveryToken == deliveryToken {
+                    try FileManager.default.removeItem(at: eventURL)
+                }
+            }
+            presentedAt = Date()
+            self.eventURL = nil
+        } catch {
+            NSLog("DoneGuard presentation receipt failed: %@", error.localizedDescription)
+        }
+    }
+
     func showDetails() {
-        showingDetails = true
+        guard let report, let reportPath else { return }
+        detailReport = report
+        detailReportPath = reportPath
+        clearCompact()
         NotificationCenter.default.post(name: .doneGuardShowDetails, object: nil)
     }
 
     func showSummary() {
-        showingDetails = false
-        NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
+        // The detail snapshot is independent, so new reports can keep arriving.
+        finish()
     }
 
     func saveReport() {
-        guard let report, let reportPath else { return }
+        guard let report = detailReport, let reportPath = detailReportPath else { return }
         let source = reportPath.deletingLastPathComponent()
         let savedRoot = dataDirectory.appendingPathComponent("reports/saved", isDirectory: true)
         let destination = savedRoot.appendingPathComponent(report.reportID, isDirectory: true)
@@ -267,13 +318,9 @@ final class ReportStore: ObservableObject {
     }
 
     func discardReport() {
-        let bundle = reportPath?.deletingLastPathComponent()
+        let bundle = detailReportPath?.deletingLastPathComponent()
         NSLog("DoneGuard discard requested for %@", bundle?.lastPathComponent ?? "missing-report")
-        report = nil
-        reportPath = nil
-        showingDetails = false
-        errorMessage = nil
-        NotificationCenter.default.post(name: .doneGuardHide, object: nil)
+        finish()
 
         guard let bundle else { return }
         do {
@@ -294,15 +341,25 @@ final class ReportStore: ObservableObject {
     }
 
     func postpone() {
+        // Retain the temporary bundle, but release the display slot immediately.
+        clearCompact()
+    }
+
+    private func clearCompact() {
+        report = nil
+        reportPath = nil
+        eventURL = nil
+        deliveryToken = nil
+        presentedAt = nil
+        errorMessage = nil
         NotificationCenter.default.post(name: .doneGuardHide, object: nil)
     }
 
-    private func finish() {
-        report = nil
-        reportPath = nil
-        showingDetails = false
+    func finish() {
+        detailReport = nil
+        detailReportPath = nil
         errorMessage = nil
-        NotificationCenter.default.post(name: .doneGuardHide, object: nil)
+        NotificationCenter.default.post(name: .doneGuardHideDetails, object: nil)
     }
 }
 
@@ -579,25 +636,23 @@ struct DetailView: View {
 
 struct ContentView: View {
     @ObservedObject var store: ReportStore
-    private let poller = Timer.publish(every: 0.8, on: .main, in: .common).autoconnect()
+    var details = false
 
     var body: some View {
         Group {
-            if let report = store.report {
-                if store.showingDetails {
+            if details, let report = store.detailReport {
                     DetailView(
                         report: report,
                         back: store.showSummary,
                         save: store.saveReport,
                         discard: store.discardReport
                     )
-                } else {
+            } else if let report = store.report {
                     SummaryView(
                         report: report,
                         showDetails: store.showDetails,
                         postpone: store.postpone
                     )
-                }
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
@@ -608,7 +663,6 @@ struct ContentView: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
-        .onReceive(poller) { _ in store.poll() }
         .alert("DoneGuard", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
@@ -621,10 +675,11 @@ struct ContentView: View {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = ReportStore()
     private var notificationPanel: NSPanel?
     private var detailWindow: NSWindow?
+    private var poller: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let panel = NSPanel(
@@ -662,11 +717,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .doneGuardHide,
             object: nil
         )
-
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(hideDetails), name: .doneGuardHideDetails, object: nil
+        )
+        // App-owned timer continues when every SwiftUI window is hidden/closed.
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.store.poll() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        poller = timer
+        store.poll()
         if store.report != nil || store.errorMessage != nil {
             if CommandLine.arguments.contains("--preview-details") && store.report != nil {
-                store.showingDetails = true
-                showDetails()
+                store.showDetails()
             } else {
                 showCompact()
             }
@@ -675,8 +738,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showCompact() {
         guard let panel = notificationPanel else { return }
-        detailWindow?.orderOut(nil)
-        panel.level = .floating
+        panel.level = .statusBar
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.setContentSize(NSSize(width: 368, height: 116))
@@ -689,6 +751,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.unhideWithoutActivation()
         panel.orderFrontRegardless()
+        DispatchQueue.main.async { [weak self, weak panel] in
+            guard let self, let panel else { return }
+            self.store.acknowledgePresentation(
+                isVisible: panel.isVisible && panel.isOnActiveSpace && !NSApp.isHidden
+            )
+        }
     }
 
     @objc private func showDetails() {
@@ -703,7 +771,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 backing: .buffered,
                 defer: false
             )
-            created.contentView = NSHostingView(rootView: ContentView(store: store))
+            created.contentView = NSHostingView(rootView: ContentView(store: store, details: true))
+            created.delegate = self
+            created.isReleasedWhenClosed = false
             created.titleVisibility = .hidden
             created.titlebarAppearsTransparent = true
             created.isMovableByWindowBackground = true
@@ -725,7 +795,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func hidePanel() {
         notificationPanel?.orderOut(nil)
+    }
+
+    @objc private func hideDetails() {
         detailWindow?.orderOut(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if notification.object as? NSWindow === detailWindow { store.finish() }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        store.poll()
+        if store.report != nil { showCompact() }
+        return false
     }
 }
 

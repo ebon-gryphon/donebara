@@ -31,12 +31,8 @@ cp "$PLUGIN_SOURCE/companion/Assets/mascot-issue.png" "$APP_PATH/Contents/Resour
 pkill -x DoneGuardCompanion 2>/dev/null || true
 
 if [[ -e "$TARGET_PATH" ]]; then
-  BACKUP_PATH="$DATA_DIR/DoneGuard Companion.previous.app"
-  if [[ -e "$BACKUP_PATH" ]]; then
-    rm -rf "$BACKUP_PATH"
-  fi
-  mv "$TARGET_PATH" "$BACKUP_PATH"
+  BACKUP_DIR="$(mktemp -d "$DATA_DIR/companion-backup.XXXXXX")"
+  mv "$TARGET_PATH" "$BACKUP_DIR/$APP_NAME"
 fi
 mv "$APP_PATH" "$TARGET_PATH"
-xattr -dr com.apple.quarantine "$TARGET_PATH" 2>/dev/null || true
 print "$TARGET_PATH"

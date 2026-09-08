@@ -309,7 +309,7 @@ class DoneGuardTests(unittest.TestCase):
     def test_companion_receives_temporary_report_and_suppresses_inline_message(self) -> None:
         (self.data / "DoneGuard Companion.app").mkdir()
         self.start_and_edit()
-        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             result = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         self.assertIsNone(result)
         report = doneguard.latest_report(self.repo)
@@ -327,15 +327,77 @@ class DoneGuardTests(unittest.TestCase):
         first = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         self.assertEqual(first.get("decision"), "block")
         self.assertFalse((self.data / "events").exists())
-        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             second = doneguard.handle_hook(self.event("Stop", stop_hook_active=True))
         self.assertIsNone(second)
         self.assertEqual(len(list((self.data / "events").glob("*.json"))), 1)
 
+    def test_launch_success_without_visible_receipt_keeps_popup_retryable(self) -> None:
+        (self.data / "DoneGuard Companion.app").mkdir()
+        self.start_and_edit()
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=False):
+            result = doneguard.handle_hook(self.event("Stop"))
+            self.assertIn("尚未收到弹窗显示回执", result["systemMessage"])
+            report = doneguard.latest_report(self.repo)
+            self.assertFalse(doneguard.notification_is_duplicate(report))
+            self.assertTrue((self.data / "events" / f"{report['report_id']}.json").exists())
+            self.assertIn("systemMessage", doneguard.handle_hook(self.event("Stop")))
+
+    def test_delivery_requires_matching_visible_receipt_not_just_launch(self) -> None:
+        self.start_and_edit()
+        doneguard.handle_hook(self.event("Stop"))
+        report = doneguard.latest_report(self.repo)
+        path = doneguard.save_report(report, enqueue=True)
+        event_path = self.data / "events" / f"{report['report_id']}.json"
+        event = json.loads(event_path.read_text())
+        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+            self.assertFalse(doneguard.deliver_to_companion(path, timeout=0))
+            for token, state, report_id, expected in [
+                ("stale", "presented", report['report_id'], False),
+                (event['delivery_token'], "loaded", report['report_id'], False),
+                (event['delivery_token'], "presented", "another-report", False),
+                (event['delivery_token'], "presented", report['report_id'], True),
+            ]:
+                doneguard.save_json(path.parent / "delivery.json", {
+                    "report_id": report_id, "delivery_token": token, "state": state,
+                })
+                self.assertEqual(doneguard.deliver_to_companion(path, timeout=0), expected)
+        with mock.patch.object(doneguard, "launch_companion", return_value=False):
+            self.assertFalse(doneguard.deliver_to_companion(path, timeout=0))
+
+    def test_requeue_preserves_inflight_token_and_ignores_legacy_delivery_cache(self) -> None:
+        self.start_and_edit()
+        doneguard.handle_hook(self.event("Stop"))
+        report = doneguard.latest_report(self.repo)
+        doneguard.save_report(report, enqueue=True)
+        event_path = self.data / "events" / f"{report['report_id']}.json"
+        token = json.loads(event_path.read_text())["delivery_token"]
+        doneguard.save_report(report, enqueue=True)
+        self.assertEqual(json.loads(event_path.read_text())["delivery_token"], token)
+        doneguard.save_json(doneguard.notification_cache_path(), {
+            doneguard.notification_scope_key(report): {"signature": doneguard.notification_signature(report)},
+        })
+        self.assertFalse(doneguard.notification_is_duplicate(report))
+
+    def test_receipt_is_accepted_when_companion_consumes_event_before_hook_waits(self) -> None:
+        self.start_and_edit()
+        doneguard.handle_hook(self.event("Stop"))
+        report = doneguard.latest_report(self.repo)
+        path = doneguard.save_report(report, enqueue=True)
+        event_path = self.data / "events" / f"{report['report_id']}.json"
+        event = json.loads(event_path.read_text())
+        doneguard.save_json(path.parent / "delivery.json", {
+            "report_id": report['report_id'], "delivery_token": event['delivery_token'],
+            "state": "presented",
+        })
+        event_path.unlink()
+        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+            self.assertTrue(doneguard.deliver_to_companion(path, timeout=0))
+
     def test_report_can_be_saved_or_discarded_after_viewing(self) -> None:
         (self.data / "DoneGuard Companion.app").mkdir()
         self.start_and_edit()
-        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         first = doneguard.latest_report(self.repo)
         saved = doneguard.finalize_report(first["report_id"], keep=True)
@@ -343,7 +405,7 @@ class DoneGuardTests(unittest.TestCase):
         self.assertFalse((self.data / "reports" / "temporary" / first["report_id"]).exists())
 
         (self.repo / "app.py").write_text("def value():\n    return 3\n", encoding="utf-8")
-        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             doneguard.handle_hook(self.event("Stop", stop_hook_active=True))
         second = doneguard.latest_report(self.repo)
         temporary = self.data / "reports" / "temporary" / second["report_id"]
@@ -354,7 +416,7 @@ class DoneGuardTests(unittest.TestCase):
     def test_expired_temporary_report_and_event_are_cleaned_together(self) -> None:
         (self.data / "DoneGuard Companion.app").mkdir()
         self.start_and_edit()
-        with mock.patch.object(doneguard, "launch_companion", return_value=True):
+        with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         report = doneguard.latest_report(self.repo)
         bundle = self.data / "reports" / "temporary" / report["report_id"]
