@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook",
+            "command": "if [ -n \"${PLUGIN_DATA:-}\" ]; then runtime_dir=\"$PLUGIN_DATA/runtime\"; runtime=\"$runtime_dir/doneguard.py\"; if [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then mkdir -p \"$runtime_dir\" && temporary=\"$runtime.$$\" && cp \"$PLUGIN_ROOT/scripts/doneguard.py\" \"$temporary\" && mv \"$temporary\" \"$runtime\"; fi; if [ -f \"$runtime\" ]; then python3 \"$runtime\" hook; fi; elif [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook; fi",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook",
+            "command": "if [ -n \"${PLUGIN_DATA:-}\" ]; then runtime_dir=\"$PLUGIN_DATA/runtime\"; runtime=\"$runtime_dir/doneguard.py\"; if [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then mkdir -p \"$runtime_dir\" && temporary=\"$runtime.$$\" && cp \"$PLUGIN_ROOT/scripts/doneguard.py\" \"$temporary\" && mv \"$temporary\" \"$runtime\"; fi; if [ -f \"$runtime\" ]; then python3 \"$runtime\" hook; fi; elif [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook; fi",
             "timeout": 10
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook",
+            "command": "if [ -n \"${PLUGIN_DATA:-}\" ]; then runtime_dir=\"$PLUGIN_DATA/runtime\"; runtime=\"$runtime_dir/doneguard.py\"; if [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then mkdir -p \"$runtime_dir\" && temporary=\"$runtime.$$\" && cp \"$PLUGIN_ROOT/scripts/doneguard.py\" \"$temporary\" && mv \"$temporary\" \"$runtime\"; fi; if [ -f \"$runtime\" ]; then python3 \"$runtime\" hook; fi; elif [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook; fi",
             "timeout": 10
           }
         ]
@@ -41,9 +41,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook",
+            "command": "if [ -n \"${PLUGIN_DATA:-}\" ]; then runtime_dir=\"$PLUGIN_DATA/runtime\"; runtime=\"$runtime_dir/doneguard.py\"; if [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then mkdir -p \"$runtime_dir\" && temporary=\"$runtime.$$\" && cp \"$PLUGIN_ROOT/scripts/doneguard.py\" \"$temporary\" && mv \"$temporary\" \"$runtime\"; fi; if [ -f \"$runtime\" ]; then python3 \"$runtime\" hook; fi; elif [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook; fi",
             "timeout": 15,
-            "statusMessage": "DoneGuard is checking completion evidence"
+            "statusMessage": "Donebara is checking completion evidence"
           }
         ]
       }
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook",
+            "command": "if [ -n \"${PLUGIN_DATA:-}\" ]; then runtime_dir=\"$PLUGIN_DATA/runtime\"; runtime=\"$runtime_dir/doneguard.py\"; if [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then mkdir -p \"$runtime_dir\" && temporary=\"$runtime.$$\" && cp \"$PLUGIN_ROOT/scripts/doneguard.py\" \"$temporary\" && mv \"$temporary\" \"$runtime\"; fi; if [ -f \"$runtime\" ]; then python3 \"$runtime\" hook; fi; elif [ -f \"$PLUGIN_ROOT/scripts/doneguard.py\" ]; then python3 \"$PLUGIN_ROOT/scripts/doneguard.py\" hook; fi",
             "timeout": 10
           }
         ]

@@ -54,6 +54,30 @@ struct ReportDisplay: Codable, Equatable {
     }
 }
 
+struct VerificationEvidence: Codable, Equatable, Identifiable {
+    let kind: String?
+    let command: String?
+    let cwd: String?
+    let scopeRoot: String?
+    let exitCode: Int?
+    let success: Bool?
+    let recordedAt: String?
+    let workspaceFingerprint: String?
+
+    var id: String { (command ?? "") + (recordedAt ?? "") + (workspaceFingerprint ?? "") }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case command
+        case cwd
+        case scopeRoot = "scope_root"
+        case exitCode = "exit_code"
+        case success
+        case recordedAt = "recorded_at"
+        case workspaceFingerprint = "workspace_fingerprint"
+    }
+}
+
 struct CompletionReport: Codable, Identifiable, Equatable {
     let reportID: String
     let projectName: String
@@ -64,6 +88,10 @@ struct CompletionReport: Codable, Identifiable, Equatable {
     let warnings: [String]
     let blockers: [String]
     let changedPaths: [String]
+    let taskSummary: String?
+    let userPrompt: String?
+    let promptTruncated: Bool?
+    let verificationEvidence: [VerificationEvidence]?
     let display: ReportDisplay?
 
     var id: String { reportID }
@@ -78,6 +106,10 @@ struct CompletionReport: Codable, Identifiable, Equatable {
         case warnings
         case blockers
         case changedPaths = "changed_paths"
+        case taskSummary = "task_summary"
+        case userPrompt = "user_prompt"
+        case promptTruncated = "prompt_truncated"
+        case verificationEvidence = "verification_evidence"
         case display
     }
 
@@ -136,7 +168,7 @@ struct CompletionReport: Codable, Identifiable, Equatable {
                 nextStep = "如果不确定是否有影响，可以请 Codex 进一步检查。"
             default:
                 title = "已确认项目 \(index + 1)"
-                detail = "DoneGuard 找到了支持任务完成的检查证据。"
+                detail = "Donebara 找到了支持任务完成的检查证据。"
                 nextStep = ""
             }
             return DisplayFinding(title: title, detail: detail, nextStep: nextStep, technicalDetail: value)
@@ -439,6 +471,120 @@ struct SummaryView: View {
     }
 }
 
+struct TaskContextSection: View {
+    let summary: String?
+    let prompt: String?
+    let promptTruncated: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("本次任务", systemImage: "text.bubble")
+                .font(.headline)
+                .foregroundStyle(.indigo)
+            Text(summary?.isEmpty == false ? summary! : "本次任务（没有可用的用户 Prompt）")
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            if let prompt, !prompt.isEmpty {
+                DisclosureGroup(promptTruncated ? "查看原始 Prompt（已截断）" : "查看原始 Prompt") {
+                    Text(prompt)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 6)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.indigo.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+struct VerificationEvidenceSection: View {
+    let values: [VerificationEvidence]
+
+    private func color(for value: VerificationEvidence) -> Color {
+        if value.success == true { return .green }
+        if value.success == false { return .red }
+        return .orange
+    }
+
+    private func status(for value: VerificationEvidence) -> String {
+        if value.success == true { return "通过" }
+        if value.success == false { return "失败" }
+        return "状态未知"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("验证命令", systemImage: "terminal")
+                .font(.headline)
+                .foregroundStyle(.teal)
+            if values.isEmpty {
+                Text("本次没有记录到验证命令。")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(values) { value in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Circle().fill(color(for: value)).frame(width: 7, height: 7)
+                            Text("\(value.kind ?? "verification") · \(status(for: value))")
+                                .font(.subheadline.bold())
+                            Spacer()
+                            Text("退出码 \(value.exitCode.map(String.init) ?? "未知")")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(value.command ?? "未知命令")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(9)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                        EvidenceRow(label: "工作目录", value: value.cwd ?? value.scopeRoot ?? "未知")
+                        EvidenceRow(label: "记录时间", value: value.recordedAt ?? "未知")
+                        EvidenceRow(label: "代码指纹", value: value.workspaceFingerprint ?? "未知")
+                    }
+                    .padding(12)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(color(for: value))
+                            .frame(width: 3)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.teal.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+struct EvidenceRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 54, alignment: .leading)
+            Text(value)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 struct CheckOverview: View {
     let checks: [DisplayCheck]
 
@@ -463,7 +609,7 @@ struct CheckOverview: View {
     var body: some View {
         if !checks.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("DoneGuard 检查了什么")
+                Text("Donebara 检查了什么")
                     .font(.headline)
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                     ForEach(checks) { check in
@@ -557,7 +703,7 @@ struct DetailView: View {
                 Button(action: back) { Label("返回", systemImage: "chevron.left") }
                     .buttonStyle(.plain)
                 Spacer()
-                Text("DoneGuard 完整报告").font(.headline)
+                Text("Donebara 完整报告").font(.headline)
                 Spacer()
                 Color.clear.frame(width: 48, height: 1)
             }
@@ -585,7 +731,13 @@ struct DetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
 
+                    TaskContextSection(
+                        summary: report.taskSummary,
+                        prompt: report.userPrompt,
+                        promptTruncated: report.promptTruncated ?? false
+                    )
                     CheckOverview(checks: report.display?.checks ?? [])
+                    VerificationEvidenceSection(values: report.verificationEvidence ?? [])
                     FindingSection(title: "为什么暂时不能确认完成", icon: "exclamationmark.octagon.fill", color: .red, values: report.displayBlockers)
                     FindingSection(title: "还有这些内容值得留意", icon: "exclamationmark.triangle.fill", color: .orange, values: report.displayWarnings)
                     FindingSection(title: "已经确认的内容", icon: "checkmark.seal.fill", color: .green, values: report.displayPassed)
@@ -604,7 +756,7 @@ struct DetailView: View {
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.blue.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
-                    Text("DoneGuard 提供的是完成证据，不等同于需求正确性或完整测试覆盖。")
+                    Text("Donebara 提供的是完成证据，不等同于需求正确性或完整测试覆盖。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 4)
@@ -656,14 +808,14 @@ struct ContentView: View {
             } else {
                 VStack(spacing: 10) {
                     ProgressView()
-                    Text(store.errorMessage ?? "等待 DoneGuard 报告…")
+                    Text(store.errorMessage ?? "等待 Donebara 报告…")
                         .foregroundStyle(.secondary)
                 }
                 .frame(width: 368, height: 116)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
-        .alert("DoneGuard", isPresented: Binding(
+        .alert("Donebara", isPresented: Binding(
             get: { store.errorMessage != nil },
             set: { if !$0 { store.errorMessage = nil } }
         )) {

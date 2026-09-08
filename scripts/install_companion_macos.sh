@@ -15,7 +15,7 @@ fi
 
 STAGING_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGING_DIR"' EXIT
-APP_NAME="DoneGuard Companion.app"
+APP_NAME="Donebara Companion.app"
 APP_PATH="$STAGING_DIR/$APP_NAME"
 TARGET_PATH="$DATA_DIR/$APP_NAME"
 

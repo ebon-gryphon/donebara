@@ -1,21 +1,25 @@
 {
   "name": "doneguard",
-  "version": "0.1.0+codex.20260908033815",
+  "version": "0.1.0+codex.20260908091432",
   "description": "Verify completion evidence and optionally show it in a macOS capybara companion.",
   "author": {
-    "name": "DoneGuard"
+    "name": "Donebara"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "DoneGuard",
+    "displayName": "Donebara",
     "shortDescription": "Completion evidence with an optional capybara popup.",
-    "longDescription": "DoneGuard maps code and declared non-code inputs to structured verification rules, validates fresh artifacts, and uses Merkle fingerprints before Codex finishes. Its optional macOS Companion shows reports outside the project and only keeps them when the user chooses Save.",
-    "developerName": "DoneGuard",
+    "longDescription": "Donebara maps code and declared non-code inputs to structured verification rules, validates fresh artifacts, and uses Merkle fingerprints before Codex finishes. Its optional macOS Companion shows reports outside the project and only keeps them when the user chooses Save.",
+    "developerName": "Donebara",
     "category": "Productivity",
     "capabilities": [
       "Skills",
       "Hooks"
     ],
-    "defaultPrompt": "Show me how DoneGuard is configured for this project and explain its latest completion check."
+    "defaultPrompt": "Show me how Donebara is configured for this project and explain its latest completion check.",
+    "brandColor": "#008C95",
+    "composerIcon": "./assets/donebara-icon.png",
+    "logo": "./assets/donebara-icon.png",
+    "logoDark": "./assets/donebara-icon.png"
   }
 }

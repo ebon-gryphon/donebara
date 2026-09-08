@@ -1,13 +1,13 @@
 ---
 name: doneguard
-description: Configure or explain DoneGuard completion checks for Codex. Use when the user mentions DoneGuard, asks whether Codex actually finished, wants a completion-evidence report, or wants to change DoneGuard modes. Do not invoke for ordinary code review requests.
+description: Configure or explain Donebara completion checks for Codex. Use when the user mentions Donebara, 水豚验收官, or DoneGuard, asks whether Codex actually finished, wants a completion-evidence report, or wants to change its modes. Do not invoke for ordinary code review requests.
 ---
 
-# DoneGuard
+# Donebara
 
-DoneGuard is a local completion guard for Git projects and protected Codex engineering assets. Its hooks record supported verification commands and inspect changes from the current user turn before Codex stops. Successful verification is tied to a fingerprint of the relevant changed content, so later edits invalidate older evidence regardless of which editing tool produced them.
+Donebara is a local completion guard for Git projects and protected Codex engineering assets. Its hooks record supported verification commands and inspect changes from the current user turn before Codex stops. Successful verification is tied to a fingerprint of the relevant changed content, so later edits invalidate older evidence regardless of which editing tool produced them.
 
-At prompt start, DoneGuard snapshots the current Git dirty-path state and the effective project policy. Shell-generated files are merged with explicitly patched paths before evidence is evaluated. If one turn touches more than one protected repository or global scope, a successful command from one scope must not certify the others; report the additional scopes as needing separate verification. A `.doneguard.json` edit takes effect for later turns, while the prompt-start policy remains authoritative for the turn that edits it so the guard cannot disable itself mid-turn.
+At prompt start, Donebara snapshots the current Git dirty-path state and the effective project policy. Shell-generated files are merged with explicitly patched paths before evidence is evaluated. If one turn touches more than one protected repository or global scope, a successful command from one scope must not certify the others; report the additional scopes as needing separate verification. A `.doneguard.json` edit takes effect for later turns, while the prompt-start policy remains authoritative for the turn that edits it so the guard cannot disable itself mid-turn.
 
 Read-only turns must stay silent even when the current Git repository already contains unrelated dirty files. A report is eligible only when the current turn changes a protected scope or runs verification for one. Protected scopes are Git repositories, non-Git directories explicitly opted in with `.doneguard.json`, global Codex skills/plugins/bin/configuration under `CODEX_HOME`, and global agent skills/plugins under `~/.agents`. Determine the scope from the edited files rather than assuming every edit belongs to the chat's starting directory. Identical workspace findings should not notify repeatedly until the fingerprint or findings change.
 
@@ -70,7 +70,7 @@ Schema 3 custom verification rules have a `kind` of `test`, `lint`, `typecheck`,
 }
 ```
 
-DoneGuard only recognizes commands that Codex already ran; it does not execute configured commands. Schema 3 structured rules reject compound commands, redirections, command substitutions, and working-directory mismatches instead of falling back to heuristic evidence. Schema 1 and 2 `command`, `command_prefix`, `pattern`, and `covers` fields remain compatible, but a required Schema 3 rule using one of those heuristic selectors is reported as unsafe. Verification rule IDs must be unique; later duplicates are ignored and reported as configuration warnings.
+Donebara only recognizes commands that Codex already ran; it does not execute configured commands. Schema 3 structured rules reject compound commands, redirections, command substitutions, and working-directory mismatches instead of falling back to heuristic evidence. Schema 1 and 2 `command`, `command_prefix`, `pattern`, and `covers` fields remain compatible, but a required Schema 3 rule using one of those heuristic selectors is reported as unsafe. Verification rule IDs must be unique; later duplicates are ignored and reported as configuration warnings.
 
 Rules can validate `coverage-summary` or `istanbul-summary` JSON artifacts. For repeated runs of the same rule, only the newest result for the current workspace fingerprint determines its status. A line containing the configured `allow_comment` value is exempt from debug-marker reporting. Debug scan reports identify the language engine and whether scanning completed; an incomplete scan must remain visible as a warning. Explicitly opted-in non-Git directories and managed global engineering assets scan the full content of files touched in the current turn because Git added-line information is unavailable there.
 
@@ -80,9 +80,11 @@ Do not enable a blocking option unless the user requests it. Explain that strict
 
 User-facing report bundles stay under `PLUGIN_DATA/reports/temporary` until the user explicitly saves or discards them. Saved reports move to `PLUGIN_DATA/reports/saved`; unopened temporary reports expire on a later check after the configured TTL. The rolling `reports/latest.json` is operational state, not a user-saved history. Do not claim a report was saved unless the user chose Save.
 
+Reports include a compact task summary and the current user prompt so completion evidence remains tied to the request it is meant to satisfy. The prompt is collapsed by default in the Companion and HTML report. Common credential shapes are redacted before persistence, and long prompts are truncated. Verification evidence should visibly include the redacted command, working directory, exit code, recorded time, and matching workspace fingerprint; unrelated exploratory shell commands are not report evidence.
+
 ## Interpreting reports
 
-Treat DoneGuard findings as completion evidence, not proof of correctness. A passing report means relevant recorded checks succeeded after the most recent observed edit. It does not replace code review or guarantee that tests cover the requested behavior.
+Treat Donebara findings as completion evidence, not proof of correctness. A passing report means relevant recorded checks succeeded after the most recent observed edit. It does not replace code review or guarantee that tests cover the requested behavior.
 
 If the user asks for the latest report, locate the plugin's `scripts/doneguard.py` from this skill directory and run:
 
@@ -92,4 +94,4 @@ python3 <plugin-root>/scripts/doneguard.py status --cwd <project-root>
 
 Add `--json` when a machine-readable report is needed.
 
-Summarize the result in plain language. Do not claim that a command ran if DoneGuard recorded an unknown exit status.
+Summarize the result in plain language. Do not claim that a command ran if Donebara recorded an unknown exit status.

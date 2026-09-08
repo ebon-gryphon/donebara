@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -55,6 +56,54 @@ class DoneGuardTests(unittest.TestCase):
             tool_input={"command": "*** Update File: app.py"},
             tool_response={"output": "Done"},
         ))
+
+    def test_hook_command_survives_plugin_cache_replacement(self) -> None:
+        plugin_root = self.root / "plugin-cache"
+        cached_script = plugin_root / "scripts" / "doneguard.py"
+        cached_script.parent.mkdir(parents=True)
+        shutil.copy2(SCRIPT, cached_script)
+        hooks = json.loads((SCRIPT.parents[1] / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+        command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        commands = {
+            hook["command"]
+            for groups in hooks["hooks"].values()
+            for group in groups
+            for hook in group["hooks"]
+        }
+        self.assertEqual(commands, {command})
+        env = {
+            **os.environ,
+            "PLUGIN_ROOT": str(plugin_root),
+            "PLUGIN_DATA": str(self.data),
+        }
+
+        first = subprocess.run(
+            command,
+            shell=True,
+            input=json.dumps(self.event("SessionStart", source="startup")),
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        runtime = self.data / "runtime" / "doneguard.py"
+        self.assertTrue(runtime.is_file())
+
+        shutil.rmtree(plugin_root)
+        second = subprocess.run(
+            command,
+            shell=True,
+            input=json.dumps(self.event("UserPromptSubmit", prompt="continue after plugin update")),
+            text=True,
+            capture_output=True,
+            env=env,
+            check=False,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertNotIn("can't open file", second.stderr)
+        state = json.loads((self.data / "sessions" / "session-test.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["task_summary"], "continue after plugin update")
 
     def test_warns_when_code_changed_without_verification(self) -> None:
         self.start_and_edit()
@@ -307,7 +356,7 @@ class DoneGuardTests(unittest.TestCase):
         self.assertFalse((self.data / "reports" / "temporary").exists())
 
     def test_companion_receives_temporary_report_and_suppresses_inline_message(self) -> None:
-        (self.data / "DoneGuard Companion.app").mkdir()
+        (self.data / "Donebara Companion.app").mkdir()
         self.start_and_edit()
         with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             result = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
@@ -322,7 +371,7 @@ class DoneGuardTests(unittest.TestCase):
 
     def test_strict_first_block_does_not_emit_completion_popup(self) -> None:
         (self.repo / ".doneguard.json").write_text('{"mode":"strict"}\n', encoding="utf-8")
-        (self.data / "DoneGuard Companion.app").mkdir()
+        (self.data / "Donebara Companion.app").mkdir()
         self.start_and_edit()
         first = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         self.assertEqual(first.get("decision"), "block")
@@ -333,7 +382,7 @@ class DoneGuardTests(unittest.TestCase):
         self.assertEqual(len(list((self.data / "events").glob("*.json"))), 1)
 
     def test_launch_success_without_visible_receipt_keeps_popup_retryable(self) -> None:
-        (self.data / "DoneGuard Companion.app").mkdir()
+        (self.data / "Donebara Companion.app").mkdir()
         self.start_and_edit()
         with mock.patch.object(doneguard, "deliver_to_companion", return_value=False):
             result = doneguard.handle_hook(self.event("Stop"))
@@ -395,7 +444,7 @@ class DoneGuardTests(unittest.TestCase):
             self.assertTrue(doneguard.deliver_to_companion(path, timeout=0))
 
     def test_report_can_be_saved_or_discarded_after_viewing(self) -> None:
-        (self.data / "DoneGuard Companion.app").mkdir()
+        (self.data / "Donebara Companion.app").mkdir()
         self.start_and_edit()
         with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
@@ -414,7 +463,7 @@ class DoneGuardTests(unittest.TestCase):
         self.assertFalse(temporary.exists())
 
     def test_expired_temporary_report_and_event_are_cleaned_together(self) -> None:
-        (self.data / "DoneGuard Companion.app").mkdir()
+        (self.data / "Donebara Companion.app").mkdir()
         self.start_and_edit()
         with mock.patch.object(doneguard, "deliver_to_companion", return_value=True):
             doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
@@ -536,25 +585,54 @@ class DoneGuardTests(unittest.TestCase):
         self.assertNotIn("abc", redacted)
         self.assertIn("<redacted>", redacted)
 
-    def test_user_prompt_text_is_not_persisted(self) -> None:
+    def test_user_prompt_is_redacted_and_kept_for_the_current_turn(self) -> None:
         doneguard.handle_hook(self.event("SessionStart", source="startup"))
-        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="private prompt text"))
+        doneguard.handle_hook(self.event(
+            "UserPromptSubmit",
+            prompt="Fix login timeout\nAPI_TOKEN=private-token\nAuthorization: Bearer abc123",
+        ))
         state = json.loads(doneguard.state_path("session-test").read_text())
         self.assertEqual(state["prompt_count"], 1)
-        self.assertNotIn("last_prompt", state)
+        self.assertEqual(state["task_summary"], "Fix login timeout API_TOKEN=<redacted> Authorization: Bearer <redacted>")
+        self.assertIn("Fix login timeout", state["user_prompt"])
+        self.assertNotIn("private-token", state["user_prompt"])
+        self.assertNotIn("abc123", state["user_prompt"])
+        self.assertIn("<redacted>", state["user_prompt"])
+
+    def test_long_prompt_is_marked_as_truncated(self) -> None:
+        prompt, truncated = doneguard.redact_prompt("x" * (doneguard.MAX_PROMPT_CHARS + 1))
+        self.assertTrue(truncated)
+        self.assertIn("已截断", prompt)
+        self.assertLess(len(prompt), doneguard.MAX_PROMPT_CHARS + 40)
 
     def test_report_contains_fingerprint_and_evidence_source(self) -> None:
-        self.start_and_edit()
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="Fix the login timeout"))
+        (self.repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse",
+            tool_name="apply_patch",
+            tool_input={"command": "*** Update File: app.py"},
+            tool_response={"output": "Done"},
+        ))
         doneguard.handle_hook(self.event(
             "PostToolUse",
             tool_name="Bash",
-            tool_input={"command": "pytest -q"},
+            tool_input={"command": "pytest -q", "workdir": str(self.repo)},
             tool_response={"exit_code": 0},
         ))
         doneguard.handle_hook(self.event("Stop"))
         report = doneguard.latest_report(self.repo)
         self.assertEqual(report["schema_version"], 3)
         self.assertTrue(report["workspace_fingerprint"].startswith("sha256:"))
+        self.assertEqual(report["task_summary"], "Fix the login timeout")
+        self.assertEqual(report["user_prompt"], "Fix the login timeout")
+        self.assertFalse(report["prompt_truncated"])
+        self.assertEqual(report["verification_evidence"][0]["command"], "pytest -q")
+        self.assertEqual(
+            Path(report["verification_evidence"][0]["cwd"]).resolve(),
+            self.repo.resolve(),
+        )
         self.assertEqual(report["verification_evidence"][0]["exit_code_source"], "tool_response")
 
     def test_report_explains_missing_verification_in_plain_chinese(self) -> None:
@@ -583,13 +661,29 @@ class DoneGuardTests(unittest.TestCase):
         self.assertIn("successful verification recorded", report["passed"][0])
 
     def test_html_report_leads_with_chinese_explanation(self) -> None:
-        self.start_and_edit()
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="修复登录超时，并补充回归测试"))
+        (self.repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="apply_patch",
+            tool_input={"command": "*** Update File: app.py"},
+        ))
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="Bash",
+            tool_input={"command": "pytest -q", "workdir": str(self.repo)},
+            tool_response={"exit_code": 0},
+        ))
         doneguard.handle_hook(self.event("Stop"))
         report = doneguard.latest_report(self.repo)
         rendered = doneguard.report_html(report)
-        self.assertIn("DoneGuard 检查了什么", rendered)
-        self.assertIn("为什么暂时不能确认完成", rendered)
-        self.assertIn("代码改动后还没有验证", rendered)
+        self.assertIn("本次任务", rendered)
+        self.assertIn("修复登录超时，并补充回归测试", rendered)
+        self.assertIn("查看原始 Prompt", rendered)
+        self.assertIn("验证命令", rendered)
+        self.assertIn("pytest -q", rendered)
+        self.assertIn(str(self.repo), rendered)
+        self.assertIn(report["workspace_fingerprint"], rendered)
+        self.assertIn("Donebara 检查了什么", rendered)
         self.assertIn("查看技术详情", rendered)
 
     def configure_required_coverage(self, lines: float = 90) -> None:

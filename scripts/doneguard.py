@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DoneGuard hook runner.
+"""Donebara hook runner.
 
 Uses only the Python standard library. Hook state and reports live under
 PLUGIN_DATA so the guarded repository stays clean unless a user explicitly
@@ -130,6 +130,8 @@ SENSITIVE_PATH_PATTERNS = [
 MANAGED_CODEX_SUBTREES = ("skills", "plugins", "bin")
 MANAGED_CODEX_FILES = ("config.toml", "AGENTS.md")
 MANAGED_AGENTS_SUBTREES = ("skills", "plugins")
+MAX_PROMPT_CHARS = 12000
+MAX_TASK_SUMMARY_CHARS = 180
 
 
 def now_iso() -> str:
@@ -176,7 +178,7 @@ def state_lock(session_id: str) -> Iterator[None]:
                 continue
             time.sleep(0.02)
     if descriptor is None:
-        raise TimeoutError(f"Could not acquire DoneGuard session lock: {lock_path}")
+        raise TimeoutError(f"Could not acquire Donebara session lock: {lock_path}")
     try:
         yield
     finally:
@@ -209,6 +211,9 @@ def new_state(event: dict[str, Any]) -> dict[str, Any]:
         "sequence": 0,
         "last_change_sequence": 0,
         "prompt_count": 0,
+        "task_summary": "",
+        "user_prompt": "",
+        "prompt_truncated": False,
         "files_touched": [],
         "turn_files_touched": [],
         "turn_shell_scopes": {},
@@ -252,7 +257,7 @@ def load_config(cwd: Path) -> tuple[dict[str, Any], list[str]]:
         warnings.append("Unsupported schema_version; version 3 semantics were used.")
         config["schema_version"] = 3
     if config.get("mode") not in {"observe", "warn", "strict"}:
-        warnings.append("Unknown DoneGuard mode; using warn.")
+        warnings.append("Unknown Donebara mode; using warn.")
         config["mode"] = "warn"
     if config.get("notification_policy") not in {"always", "issues_only", "never"}:
         warnings.append("notification_policy must be always, issues_only, or never; using always.")
@@ -1157,6 +1162,47 @@ def redact_command(command: str) -> str:
     return normalized[:500]
 
 
+def redact_prompt(prompt: str) -> tuple[str, bool]:
+    """Preserve the current user prompt while masking common credential shapes."""
+    redacted = prompt.strip()
+    redacted = re.sub(
+        r"(?i)\b([A-Z_][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH)[A-Z0-9_]*)"
+        r"\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+        lambda match: f"{match.group(1)}=<redacted>",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(--(?:token|secret|password|passwd|api-key|authorization|dsn|database-url|connection-string))"
+        r"(?:=|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s;&|]+)",
+        lambda match: f"{match.group(1)}=<redacted>",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s:]+:[^/@\s]+@",
+        r"\1<redacted>@",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(Authorization\s*:\s*(?:Bearer|Basic)\s+)[^'\"\s]+",
+        r"\1<redacted>",
+        redacted,
+    )
+    truncated = len(redacted) > MAX_PROMPT_CHARS
+    if truncated:
+        redacted = redacted[:MAX_PROMPT_CHARS].rstrip() + "\n…（Prompt 过长，报告中已截断）"
+    return redacted, truncated
+
+
+def summarize_prompt(prompt: str) -> str:
+    """Create a compact, deterministic task label without invoking a model."""
+    compact = " ".join(prompt.split())
+    if not compact:
+        return "本次任务（没有可用的用户 Prompt）"
+    if len(compact) <= MAX_TASK_SUMMARY_CHARS:
+        return compact
+    return compact[:MAX_TASK_SUMMARY_CHARS].rstrip() + "…"
+
+
 def verification_key(item: dict[str, Any]) -> tuple[str, str]:
     identifier = str(item.get("verification_id") or "")
     if identifier:
@@ -1780,7 +1826,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
     """Turn stable machine evidence into a beginner-friendly Chinese explanation."""
     finding = {
         "title": "检查记录",
-        "detail": "DoneGuard 记录了一项需要关注的检查结果。",
+        "detail": "Donebara 记录了一项需要关注的检查结果。",
         "next_step": "如果你不确定这项内容的含义，可以把下方技术详情交给开发者查看。",
         "technical_detail": message,
     }
@@ -1788,7 +1834,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
     if message == "code changed, but no successful test, lint, typecheck, or build was recorded after the latest observed edit":
         return {
             "title": "代码改动后还没有验证",
-            "detail": "检测到代码有改动，但最后一次修改之后，没有找到成功的测试、代码规范检查、类型检查或构建记录。因此 DoneGuard 暂时无法确认这次修改已经验证。",
+            "detail": "检测到代码有改动，但最后一次修改之后，没有找到成功的测试、代码规范检查、类型检查或构建记录。因此 Donebara 暂时无法确认这次修改已经验证。",
             "next_step": "请运行适合该项目的测试或构建命令，然后确认命令成功结束。",
             "technical_detail": message,
         }
@@ -1832,7 +1878,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
         count = match.group(1)
         return {
             "title": "已检查本次涉及的文件",
-            "detail": f"DoneGuard 已检查本次改动涉及的 {count} 个文件。",
+            "detail": f"Donebara 已检查本次改动涉及的 {count} 个文件。",
             "next_step": "",
             "technical_detail": message,
         }
@@ -1856,14 +1902,14 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
         details = message.split(": ", 1)[1]
         return {
             "title": "改动涉及可能包含敏感信息的文件",
-            "detail": "本次修改碰到了名称看起来像密钥、凭据或环境配置的文件。DoneGuard 无法判断其中是否真的包含秘密信息。",
+            "detail": "本次修改碰到了名称看起来像密钥、凭据或环境配置的文件。Donebara 无法判断其中是否真的包含秘密信息。",
             "next_step": "提交或分享前，请确认文件中没有密码、令牌、私钥等敏感内容。",
             "technical_detail": "文件：" + details,
         }
     if message.startswith("some verification commands had an unknown exit status"):
         return {
             "title": "有些检查无法确认是否成功",
-            "detail": "DoneGuard 看到了验证命令，但没有取得明确的成功或失败状态，因此没有把它们算作已通过。",
+            "detail": "Donebara 看到了验证命令，但没有取得明确的成功或失败状态，因此没有把它们算作已通过。",
             "next_step": "请重新运行这些命令，并确认能看到明确的成功结果。",
             "technical_detail": message,
         }
@@ -1877,7 +1923,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
     if message.startswith("workspace fingerprint is incomplete: "):
         return {
             "title": "工作区状态没有读取完整",
-            "detail": "项目较大或读取受到限制，DoneGuard 没能完整确认当前代码状态，因此验证结果的可信度会降低。",
+            "detail": "项目较大或读取受到限制，Donebara 没能完整确认当前代码状态，因此验证结果的可信度会降低。",
             "next_step": "请查看技术详情；必要时调整 fingerprint_limits 后重新检查。",
             "technical_detail": message,
         }
@@ -1892,7 +1938,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
         identifier, details = message.split(" coverage (", 1)
         return {
             "title": f"{identifier} 的覆盖率证据有效",
-            "detail": "DoneGuard 已读取并确认这项覆盖率结果符合项目要求。",
+            "detail": "Donebara 已读取并确认这项覆盖率结果符合项目要求。",
             "next_step": "",
             "technical_detail": details.removesuffix(")"),
         }
@@ -1907,14 +1953,14 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
         identifier = message.split()[2]
         return {
             "title": f"项目要求的检查 {identifier} 尚未通过",
-            "detail": "项目配置规定这项检查必须成功，但 DoneGuard 没有找到符合要求的成功记录。",
+            "detail": "项目配置规定这项检查必须成功，但 Donebara 没有找到符合要求的成功记录。",
             "next_step": f"请运行项目中标识为 {identifier} 的检查并处理失败项。",
             "technical_detail": message,
         }
 
     if category == "passed":
         finding["title"] = "检查已通过"
-        finding["detail"] = "DoneGuard 找到了支持任务完成的检查证据。"
+        finding["detail"] = "Donebara 找到了支持任务完成的检查证据。"
         finding["next_step"] = ""
     elif category == "warning":
         finding["title"] = "有一项内容需要留意"
@@ -1939,7 +1985,7 @@ def plain_language_report(report: dict[str, Any]) -> dict[str, Any]:
         summary = f"主要验证没有发现阻断问题，同时有 {len(warnings)} 项内容建议你确认。"
     else:
         headline = "任务已完成检查"
-        summary = "DoneGuard 找到了与当前改动匹配的完成证据，没有发现需要阻止交付的问题。"
+        summary = "Donebara 找到了与当前改动匹配的完成证据，没有发现需要阻止交付的问题。"
 
     has_missing_verification = any("changed, but no successful" in item for item in blockers)
     has_failed_verification = any(item.startswith("the latest recorded ") for item in blockers)
@@ -2001,7 +2047,7 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
             config = baseline_config
             config_warnings = list(baseline_warnings) if isinstance(baseline_warnings, list) else []
             config_warnings.append(
-                "DoneGuard configuration changed during this turn; the policy captured at prompt start was used"
+                "Donebara configuration changed during this turn; the policy captured at prompt start was used"
             )
     all_paths = sorted({
         path for path in raw_paths
@@ -2181,6 +2227,9 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
         "verification_coverage": coverage_map,
         "debug_scan": debug["scan"],
         "verification_evidence": latest_results[-10:],
+        "task_summary": str(state.get("task_summary") or "本次任务（没有可用的用户 Prompt）"),
+        "user_prompt": str(state.get("user_prompt") or ""),
+        "prompt_truncated": bool(state.get("prompt_truncated")),
         "passed": passed,
         "warnings": warnings,
         "blockers": blockers,
@@ -2289,18 +2338,50 @@ def report_html(report: dict[str, Any]) -> str:
             + "</p></article>"
             for item in values
         )
-        return f'<section><h2>DoneGuard 检查了什么</h2><div class="checks">{cards}</div></section>'
+        return f'<section><h2>Donebara 检查了什么</h2><div class="checks">{cards}</div></section>'
+
+    def evidence_section(values: list[dict[str, Any]]) -> str:
+        if not values:
+            return '<section><h2>验证命令</h2><p class="meta">本次没有记录到验证命令。</p></section>'
+        cards = ""
+        for item in values:
+            success = item.get("success")
+            status_class = "passed" if success is True else ("issue" if success is False else "warning")
+            status_label = "通过" if success is True else ("失败" if success is False else "状态未知")
+            exit_code = "未知" if item.get("exit_code") is None else str(item.get("exit_code"))
+            command = html.escape(str(item.get("command") or ""))
+            command_cwd = html.escape(str(item.get("cwd") or item.get("scope_root") or ""))
+            recorded_at = html.escape(str(item.get("recorded_at") or ""))
+            fingerprint = html.escape(str(item.get("workspace_fingerprint") or ""))
+            kind = html.escape(str(item.get("kind") or "verification"))
+            cards += (
+                f'<article class="evidence {status_class}"><div class="evidence-title">'
+                f'<strong>{kind} · {status_label}</strong><span>退出码 {html.escape(exit_code)}</span></div>'
+                f'<pre><code>{command}</code></pre><dl>'
+                f'<dt>工作目录</dt><dd>{command_cwd or "未知"}</dd>'
+                f'<dt>记录时间</dt><dd>{recorded_at or "未知"}</dd>'
+                f'<dt>代码指纹</dt><dd>{fingerprint or "未知"}</dd>'
+                f'</dl></article>'
+            )
+        return f'<section><h2>验证命令</h2><div class="evidence-list">{cards}</div></section>'
 
     display = report.get("display") or plain_language_report(report)
-    title = html.escape(str(report.get("project_name") or "DoneGuard"))
+    title = html.escape(str(report.get("project_name") or "Donebara"))
     checked_at = html.escape(str(report.get("checked_at") or ""))
+    task_summary = html.escape(str(report.get("task_summary") or "本次任务（没有可用的用户 Prompt）"))
+    user_prompt = html.escape(str(report.get("user_prompt") or ""))
+    prompt_note = " · 已截断" if report.get("prompt_truncated") else ""
+    prompt_html = (
+        f'<details class="prompt"><summary>查看原始 Prompt{prompt_note}</summary><pre>{user_prompt}</pre></details>'
+        if user_prompt else '<p class="meta">没有可用的原始 Prompt。</p>'
+    )
     changed = [html.escape(str(value)) for value in report.get("changed_paths", [])]
     changed_html = "".join(f"<code>{value}</code>" for value in changed) or "<span>无相关文件变更</span>"
     status = report_status(report)
     status_label = {"success": "检查完成", "warning": "存在提醒", "issue": "需要处理"}[status]
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DoneGuard · {title}</title><style>
+<title>Donebara · {title}</title><style>
 :root{{--ink:#18322f;--muted:#667975;--paper:#fffdf8;--green:#1f8a70;--amber:#d88718;--red:#c6533d}}
 *{{box-sizing:border-box}} body{{margin:0;background:#edf4ef;color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}}
 main{{max-width:820px;margin:40px auto;padding:34px;background:var(--paper);border:1px solid #dbe7df;border-radius:24px;box-shadow:0 18px 60px #244b3d20}}
@@ -2308,18 +2389,21 @@ main{{max-width:820px;margin:40px auto;padding:34px;background:var(--paper);bord
 .pill{{display:inline-block;margin:10px 0 18px;padding:6px 12px;border-radius:99px;background:#e2f4eb;color:var(--green);font-weight:700}}
 section{{margin-top:20px;padding:18px 20px;border-radius:16px;background:#f5f7f5}} section.issue{{background:#fff0ea}} section.warning{{background:#fff6df}}
 h2{{margin:0 0 8px;font-size:17px}} ul{{margin:0;padding-left:21px}} li+li{{margin-top:16px}} li p{{margin:3px 0}} .action{{color:#314d47}} details{{margin-top:6px;color:var(--muted)}} details code{{display:block;margin-top:6px;white-space:pre-wrap}} .checks{{display:grid;grid-template-columns:1fr 1fr;gap:10px}} .check{{padding:12px;border-radius:12px;background:#fff}} .check p{{margin:4px 0 0;color:var(--muted)}} .check.issue{{border-left:4px solid var(--red)}} .check.warning{{border-left:4px solid var(--amber)}} .check.passed{{border-left:4px solid var(--green)}} .paths{{display:flex;flex-wrap:wrap;gap:8px}} code{{padding:4px 8px;border-radius:8px;background:#e8efeb}}
+.task-summary{{margin:0;font-size:17px}} .prompt summary{{cursor:pointer}} .prompt pre,.evidence pre{{overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px;border-radius:10px;background:#e8efeb;color:var(--ink)}} .prompt pre{{max-height:320px}} .evidence-list{{display:grid;gap:10px}} .evidence{{padding:13px;border-radius:12px;background:#fff;border-left:4px solid var(--muted)}} .evidence.passed{{border-left-color:var(--green)}} .evidence.warning{{border-left-color:var(--amber)}} .evidence.issue{{border-left-color:var(--red)}} .evidence-title{{display:flex;justify-content:space-between;gap:12px}} .evidence-title span{{color:var(--muted)}} .evidence dl{{display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;margin:8px 0 0;font-size:13px}} .evidence dt{{color:var(--muted)}} .evidence dd{{margin:0;word-break:break-all}}
 footer{{margin-top:26px;color:var(--muted);font-size:13px}}
 @media(max-width:640px){{main{{margin:0;padding:22px;border-radius:0}}.checks{{grid-template-columns:1fr}}}}
 </style></head><body><main><div class="eyebrow">DONEGUARD 完成检查报告</div><h1>{title} · {status_label}</h1>
 <div class="pill">{status_label}</div><h2>{html.escape(str(display.get("headline") or status_label))}</h2>
 <p class="summary">{html.escape(str(display.get("summary") or ""))}</p>
 <div class="meta">检查时间 {checked_at} · {html.escape(str(display.get("mode_label") or report.get("mode") or ""))}</div>
+<section><h2>本次任务</h2><p class="task-summary">{task_summary}</p>{prompt_html}</section>
 {checks_section(list(display.get("checks", [])))}
+{evidence_section(list(report.get("verification_evidence", [])))}
 {finding_section("为什么暂时不能确认完成", list(display.get("blockers", [])), "issue")}
 {finding_section("还有这些内容值得留意", list(display.get("warnings", [])), "warning")}
 {finding_section("已经确认的内容", list(display.get("passed", [])), "passed")}
 <section><h2>本次检查涉及的文件</h2><div class="paths">{changed_html}</div></section>
-<footer>DoneGuard 提供的是完成证据，不等同于需求正确性或完整测试覆盖。</footer></main></body></html>"""
+<footer>Donebara 提供的是完成证据，不等同于需求正确性或完整测试覆盖。</footer></main></body></html>"""
 
 
 def cleanup_temporary_reports(ttl_hours: int) -> None:
@@ -2378,7 +2462,7 @@ def save_report(report: dict[str, Any], enqueue: bool = True) -> Path:
 
 
 def companion_app_path() -> Path:
-    return plugin_data_dir() / "DoneGuard Companion.app"
+    return plugin_data_dir() / "Donebara Companion.app"
 
 
 def launch_companion() -> bool:
@@ -2450,7 +2534,8 @@ def finalize_report(report_id: str, keep: bool) -> Path | None:
 def format_report(report: dict[str, Any]) -> str:
     display = report.get("display") or plain_language_report(report)
     pieces = [
-        "DoneGuard 完成检查",
+        "Donebara 完成检查",
+        f"任务：{report.get('task_summary') or '本次任务（没有可用的用户 Prompt）'}",
         f"结论：{display['headline']}",
         str(display["summary"]),
         f"模式：{display['mode_label']}",
@@ -2458,6 +2543,14 @@ def format_report(report: dict[str, Any]) -> str:
             f"{item['title']}—{item['detail']}" for item in display.get("checks", [])
         ),
     ]
+    evidence = [item for item in report.get("verification_evidence", []) if isinstance(item, dict)]
+    if evidence:
+        pieces.append("验证命令：")
+        for item in evidence:
+            exit_code = "未知" if item.get("exit_code") is None else str(item.get("exit_code"))
+            pieces.append(
+                f"- {item.get('command') or '未知命令'}（cwd: {item.get('cwd') or item.get('scope_root') or '未知'}；退出码: {exit_code}）"
+            )
     for heading, key in (
         ("需要处理", "blockers"),
         ("提醒", "warnings"),
@@ -2494,6 +2587,9 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
 
     if hook_name == "UserPromptSubmit":
         state["prompt_count"] = int(state.get("prompt_count") or 0) + 1
+        raw_prompt = event.get("prompt") if isinstance(event.get("prompt"), str) else ""
+        state["user_prompt"], state["prompt_truncated"] = redact_prompt(raw_prompt)
+        state["task_summary"] = summarize_prompt(state["user_prompt"])
         state["turn_started_sequence"] = state["sequence"]
         state["turn_started_ns"] = time.time_ns()
         state["turn_files_touched"] = []
@@ -2573,6 +2669,7 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
                     "kind": rule["kind"],
                     "evidence_strength": "structured" if rule.get("structured") else "heuristic",
                     "command": redact_command(command),
+                    "cwd": str(cwd),
                     "exit_code": exit_code,
                     "exit_code_source": exit_code_source,
                     "success": None if exit_code is None else exit_code == 0,
@@ -2641,7 +2738,7 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
             return None
         if wants_popup and companion_available:
             # Do not turn an unacknowledged queued popup into a deduplication hit.
-            return {"systemMessage": message + "\nDoneGuard 尚未收到弹窗显示回执；报告仍在通知队列中，将继续尝试展示。"}
+            return {"systemMessage": message + "\nDonebara 尚未收到弹窗显示回执；报告仍在通知队列中，将继续尝试展示。"}
         record_notification(report)
         return {"systemMessage": message}
 
@@ -2689,7 +2786,7 @@ def latest_report(cwd: Path | None) -> dict[str, Any] | None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="DoneGuard completion evidence checker")
+    parser = argparse.ArgumentParser(description="Donebara completion evidence checker")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("hook", help="Process a Codex hook event from stdin")
     status_parser = subparsers.add_parser("status", help="Show the latest saved report")
@@ -2704,7 +2801,7 @@ def main() -> int:
         try:
             event = json.load(sys.stdin)
         except json.JSONDecodeError as exc:
-            print(json.dumps({"systemMessage": f"DoneGuard received invalid hook JSON: {exc}"}))
+            print(json.dumps({"systemMessage": f"Donebara received invalid hook JSON: {exc}"}))
             return 0
         result = handle_hook(event)
         if result is not None:
@@ -2715,18 +2812,18 @@ def main() -> int:
         try:
             destination = finalize_report(args.report_id, keep=args.action == "save")
         except ValueError as exc:
-            print(f"DoneGuard could not update the report: {exc}", file=sys.stderr)
+            print(f"Donebara could not update the report: {exc}", file=sys.stderr)
             return 2
         if args.action == "save":
             if destination is None:
-                print("DoneGuard could not find that temporary report.", file=sys.stderr)
+                print("Donebara could not find that temporary report.", file=sys.stderr)
                 return 1
             print(destination)
         return 0
 
     report = latest_report(args.cwd)
     if report is None:
-        print("DoneGuard has not saved a report for this project yet.")
+        print("Donebara has not saved a report for this project yet.")
         return 1
     print(json.dumps(report, ensure_ascii=False, indent=2) if args.as_json else format_report(report))
     return 0

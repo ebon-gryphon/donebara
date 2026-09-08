@@ -1,12 +1,16 @@
-# DoneGuard
+<div align="center">
+  <img src="./assets/donebara-icon.png" alt="Donebara 水豚验收官" width="160">
+  <h1>Donebara</h1>
+  <p><strong>水豚验收官</strong></p>
+</div>
 
-DoneGuard 是一个面向 Codex 的本地完成检查插件。它会观察代码改动和验证命令，在任务结束前检查当前工作区是否具备足够的新鲜验证证据。可选的 macOS Companion 会在项目外显示一条带二次元水豚的右上角通知，并在用户查看完整报告后再询问是否保存。
+水豚验收官（Donebara）是一个面向 Codex 的本地完成检查插件。它会观察代码改动和验证命令，在任务结束前检查当前工作区是否具备足够的新鲜验证证据。可选的 macOS Companion 会在项目外显示一条带像素水豚的右上角通知，并在用户查看完整报告后再询问是否保存。
 
 当前版本默认保护 Git 仓库，也会保护全局 Skill、插件和 Codex CLI 配置；非 Git 目录可以通过 `.doneguard.json` 显式启用。默认模式为 `warn`，它会展示报告，但不会阻止任务结束。
 
-DoneGuard 以“本轮是否修改了受保护的工程资产”为触发条件。只读问答、新闻搜索和资料查询不会因为工作区里早先遗留的未提交改动而生成新报告。同一个工作区指纹和问题状态只通知一次，内容或验证状态变化后才会再次通知。
+水豚验收官以“本轮是否修改了受保护的工程资产”为触发条件。只读问答、新闻搜索和资料查询不会因为工作区里早先遗留的未提交改动而生成新报告。同一个工作区指纹和问题状态只通知一次，内容或验证状态变化后才会再次通知。
 
-每次用户提示开始时，DoneGuard 会同时记录 Git 脏文件内容状态和当时生效的项目规则。补丁修改与后续脚本生成的文件会在停止前合并检查；同一轮涉及多个受保护仓库时，一处仓库的成功命令不能替其他仓库提供完成证据。若本轮修改 `.doneguard.json`，新规则从后续轮次生效，本轮仍使用提示开始时的规则，避免检查过程被同一轮改动意外关闭。
+每次用户提示开始时，水豚验收官会同时记录 Git 脏文件内容状态和当时生效的项目规则。补丁修改与后续脚本生成的文件会在停止前合并检查；同一轮涉及多个受保护仓库时，一处仓库的成功命令不能替其他仓库提供完成证据。若本轮修改 `.doneguard.json`，新规则从后续轮次生效，本轮仍使用提示开始时的规则，避免检查过程被同一轮改动意外关闭。
 
 ## 安装和更新
 
@@ -21,22 +25,22 @@ DoneGuard 以“本轮是否修改了受保护的工程资产”为触发条件�
 5. 如果 Codex 询问是否允许下载或安装，请先看清操作内容，再点击允许。
 
 ```text
-请帮我安装 DoneGuard。
-项目地址是 https://github.com/ebon-gryphon/doneguard
+请帮我安装水豚验收官（Donebara）。
+项目地址是 https://github.com/ebon-gryphon/donebara
 请把项目下载到 ~/plugins/doneguard，加入我的 Personal marketplace，安装插件，并在 macOS 上安装 Companion。完成后请检查是否安装成功，并告诉我结果。
 ```
 
-看到安装成功的回复以后，再新建一个任务。DoneGuard 会从新任务开始工作。
+看到安装成功的回复以后，再新建一个任务。水豚验收官会从新任务开始工作。
 
-DoneGuard 目前还不能在公开插件目录里搜索。Personal marketplace 是保存在你电脑上的个人插件列表，公开插件商店是另一套目录。上面的安装过程会由 Codex 处理，不需要你事先配置 Personal marketplace。
+水豚验收官目前还不能在公开插件目录里搜索。Personal marketplace 是保存在你电脑上的个人插件列表，公开插件商店是另一套目录。上面的安装过程会由 Codex 处理，不需要你事先配置 Personal marketplace。
 
 ### 更新
 
-已经安装过 DoneGuard 时，也不用自己寻找文件。新建一个 Codex 任务，把下面这段话完整发给 Codex。
+已经安装过水豚验收官时，也不用自己寻找文件。新建一个 Codex 任务，把下面这段话完整发给 Codex。
 
 ```text
-请帮我更新 DoneGuard。
-项目地址是 https://github.com/ebon-gryphon/doneguard
+请帮我更新水豚验收官（Donebara）。
+项目地址是 https://github.com/ebon-gryphon/donebara
 请下载最新版本，重新安装插件并更新 macOS Companion。完成后请检查是否更新成功，并告诉我结果。
 ```
 
@@ -44,7 +48,7 @@ DoneGuard 目前还不能在公开插件目录里搜索。Personal marketplace �
 
 ### 手动重新安装
 
-如果你只是想使用 DoneGuard，可以跳过这一节。下面的命令只适合已经把 DoneGuard 加入本机 Personal marketplace，并且熟悉终端的用户。
+如果你只是想使用水豚验收官，可以跳过这一节。下面的命令只适合已经把水豚验收官加入本机 Personal marketplace，并且熟悉终端的用户。
 
 ```bash
 codex plugin add doneguard@personal
@@ -53,7 +57,7 @@ zsh /path/to/doneguard/scripts/install_companion_macos.sh
 
 ## 它解决什么问题
 
-一次测试通过以后，代码仍可能继续变化。DoneGuard 会为相关代码计算工作区指纹，并把指纹写入验证记录。任务结束时，当前指纹必须与成功验证时的指纹一致，旧测试结果才会被采纳。
+一次测试通过以后，代码仍可能继续变化。水豚验收官会为相关代码计算工作区指纹，并把指纹写入验证记录。任务结束时，当前指纹必须与成功验证时的指纹一致，旧测试结果才会被采纳。
 
 这套检查还能发现下面几类情况。
 
@@ -62,7 +66,7 @@ zsh /path/to/doneguard/scripts/install_companion_macos.sh
 - 改动中出现临时调试标记。
 - `.env`、密钥和凭据类文件发生变化。
 
-DoneGuard 提供的是完成证据。报告通过说明插件观察到的相关检查成功，并且这些检查发生在当前代码状态下。它不能替代代码审查，也不能证明测试覆盖了需求。
+水豚验收官提供的是完成证据。报告通过说明插件观察到的相关检查成功，并且这些检查发生在当前代码状态下。它不能替代代码审查，也不能证明测试覆盖了需求。
 
 ## 三种模式
 
@@ -126,7 +130,7 @@ DoneGuard 提供的是完成证据。报告通过说明插件观察到的相关�
 
 ## 验证命令
 
-DoneGuard 内置识别常见的测试、lint、类型检查和构建命令，包括下面这些工具。
+水豚验收官内置识别常见的测试、lint、类型检查和构建命令，包括下面这些工具。
 
 - 测试工具包括 `pytest`、`unittest`、Jest、Vitest、Go、Cargo、Gradle、Maven、xcodebuild 和 `make test`。
 - lint 工具包括 Ruff、ESLint、Biome、golangci-lint、Clippy 和 `go vet`。
@@ -174,13 +178,13 @@ DoneGuard 内置识别常见的测试、lint、类型检查和构建命令，包
 }
 ```
 
-这些配置只用于识别 Codex 已经执行的命令。DoneGuard 不会主动执行配置中的内容。结构化规则会拒绝复合 Shell 命令、重定向、命令替换和工作目录不匹配，避免弱匹配结果被当作必需证据。Schema 1 和 2 的 `command`、`command_prefix`、`pattern` 与 `covers` 仍然兼容，但 Schema 3 不接受启发式选择器充当必需规则。
+这些配置只用于识别 Codex 已经执行的命令。水豚验收官不会主动执行配置中的内容。结构化规则会拒绝复合 Shell 命令、重定向、命令替换和工作目录不匹配，避免弱匹配结果被当作必需证据。Schema 1 和 2 的 `command`、`command_prefix`、`pattern` 与 `covers` 仍然兼容，但 Schema 3 不接受启发式选择器充当必需规则。
 
 每条验证规则的 `id` 必须唯一。重复 ID 的后续规则会被忽略并显示配置提醒，防止较弱的检查覆盖同名的必做检查。内置识别也支持常见 monorepo 写法，例如 `make -C backend test`、`npm --prefix web test`、`pnpm --filter web test`、`yarn workspace web test` 和 `uv run --project backend pytest`。
 
 ## 验证结果怎样生效
 
-验证完成后，DoneGuard 会记录下面这些信息。
+验证完成后，水豚验收官会记录下面这些信息。
 
 - 验证类型和经过脱敏的命令。
 - 退出码及其来源。
@@ -191,7 +195,7 @@ DoneGuard 内置识别常见的测试、lint、类型检查和构建命令，包
 
 ## 何时保持安静
 
-DoneGuard 在每次用户提示开始时记录当前 Git 状态，并只为本轮发生的受保护变更生成报告。下面几类任务默认保持安静。
+水豚验收官在每次用户提示开始时记录当前 Git 状态，并只为本轮发生的受保护变更生成报告。下面几类任务默认保持安静。
 
 - 仅搜索新闻、浏览资料或回答问题，没有修改工程文件。
 - 当前 Git 仓库虽然已有脏文件，但本轮没有继续修改，也没有运行验证。
@@ -204,11 +208,11 @@ DoneGuard 在每次用户提示开始时记录当前 Git 状态，并只为本�
 - `~/.agents/skills` 与 `~/.agents/plugins`。
 - 使用 `.doneguard.json` 显式启用的非 Git 目录。
 
-报告作用域由实际修改的文件决定，不要求它们位于聊天启动目录中。全局工程资产使用文件内容指纹，而不是依赖 Git。脚本在外部仓库写入当前轮次的新内容时，DoneGuard 会保守地纳入最近修改的脏文件并说明该作用域没有提示开始时的基线。同一轮触及多个保护作用域时会要求分别验证，不会用一份成功记录覆盖全部作用域。相同指纹、提醒和阻断项已经通知过时，后续无状态变化的停止事件不会重复弹窗。
+报告作用域由实际修改的文件决定，不要求它们位于聊天启动目录中。全局工程资产使用文件内容指纹，而不是依赖 Git。脚本在外部仓库写入当前轮次的新内容时，水豚验收官会保守地纳入最近修改的脏文件并说明该作用域没有提示开始时的基线。同一轮触及多个保护作用域时会要求分别验证，不会用一份成功记录覆盖全部作用域。相同指纹、提醒和阻断项已经通知过时，后续无状态变化的停止事件不会重复弹窗。
 
 ## 调试标记和敏感文件
 
-DoneGuard 会检查已跟踪改动和未跟踪源文件中的新增内容。目前内置识别 `TODO`、`FIXME`、`HACK`、`console.log`、`debugger`、Python 断点和 Ruby `binding.pry`。Python 文件使用标准库 `tokenize`，JavaScript 和 TypeScript 使用支持注释、正则、模板字符串及 `${...}` 表达式的语言词法扫描器，其他语言使用通用扫描器。
+水豚验收官会检查已跟踪改动和未跟踪源文件中的新增内容。目前内置识别 `TODO`、`FIXME`、`HACK`、`console.log`、`debugger`、Python 断点和 Ruby `binding.pry`。Python 文件使用标准库 `tokenize`，JavaScript 和 TypeScript 使用支持注释、正则、模板字符串及 `${...}` 表达式的语言词法扫描器，其他语言使用通用扫描器。
 
 测试夹具或示例代码确实需要保留标记时，可以在同一行加入下面的豁免说明。非 Git 保护目录没有 Git 新增行信息，因此只扫描本轮明确触碰到的文件，并检查这些文件的完整内容。
 
@@ -230,11 +234,11 @@ python3 <plugin-root>/scripts/doneguard.py status --cwd <project-root>
 python3 <plugin-root>/scripts/doneguard.py status --cwd <project-root> --json
 ```
 
-报告首先用中文说明“检查了什么、为什么能或不能确认完成、接下来建议怎么做”。测试命令、英文原始证据、工作区 Merkle 指纹、分块数、性能指标、跨会话缓存命中、改动路径、覆盖映射和调试扫描结果仍会保留，但会放进次要的技术详情中。这样普通用户可以先看懂结论，开发者仍能追查原始判断依据。退出状态未知的命令和不完整指纹都不会被算作成功。
+报告首先用中文说明“本次任务是什么、检查了什么、为什么能或不能确认完成、接下来建议怎么做”。任务摘要默认显示，当前用户 Prompt 默认折叠；常见令牌、密码、鉴权头和带凭据 URL 会在写入报告前脱敏，过长 Prompt 会截断。验证区直接展示脱敏后的完整命令、工作目录、退出码、记录时间和对应的工作区 Merkle 指纹。英文原始证据、分块数、性能指标、跨会话缓存命中、改动路径、覆盖映射和调试扫描结果仍会保留在次要技术详情中。这样普通用户可以先看懂结论，开发者仍能追查原始判断依据。退出状态未知的命令和不完整指纹都不会被算作成功。
 
 ## macOS 水豚 Companion
 
-Companion 是独立于项目目录的轻量 SwiftUI 应用。源码安装会在 DoneGuard 的插件数据目录中构建 `DoneGuard Companion.app`，不会向用户的代码仓库写入报告文件。
+Companion 是独立于项目目录的轻量 SwiftUI 应用。源码安装会在水豚验收官的插件数据目录中构建 `Donebara Companion.app`，不会向用户的代码仓库写入报告文件。
 
 ```bash
 zsh /path/to/doneguard/scripts/install_companion_macos.sh
@@ -248,7 +252,7 @@ zsh /path/to/doneguard/scripts/install_companion_macos.sh
 - 用户没有作出选择而关闭窗口时，报告仍是临时数据；默认 24 小时后由下一次检查清理。
 - “稍后”保留临时报告并释放通知位置。没有操作的通知显示至少 6 秒后，也允许后续报告继续出现；查看详情时，新通知不会改写正在阅读的报告。
 - 只有 Companion 确认窗口可见并写入对应展示回执，Hook 才认为弹窗已送达。启动成功但没有回执时，聊天内会提供备用提醒，通知事件继续保留。旧版仅凭启动成功写入的去重记录不再拦截通知。
-- Companion 不保存用户提示词，也不复制项目源文件内容。报告只包含 DoneGuard 已有的证据、路径和检查结果。
+- Companion 不复制项目源文件内容。报告会包含当前轮次的任务摘要、经常见敏感字段脱敏后的用户 Prompt，以及水豚验收官已有的验证命令、路径和检查结果。原始 Prompt 默认折叠，临时报告按 TTL 清理，只有用户明确选择保存后才长期保留。
 
 需要脚本化管理临时报告时可以使用下面的命令。
 
@@ -271,7 +275,7 @@ python3 -m py_compile scripts/doneguard.py
 
 ## 当前边界
 
-- 非代码文件需要由项目在 `when_changed` 或 `fingerprint_paths` 中声明；DoneGuard 无法自动判断一份业务文档是否影响运行结果。
+- 非代码文件需要由项目在 `when_changed` 或 `fingerprint_paths` 中声明；水豚验收官无法自动判断一份业务文档是否影响运行结果。
 - Python 使用标准分词器，JavaScript 和 TypeScript 使用语言词法扫描器，但后者仍不是完整 AST；无法完整扫描、文件过大或语法未闭合时会显式警告，不会静默声称扫描完整。
 - Schema 3 的必需规则必须使用结构化 `argv`。内置命令和旧版启发式选择器只作为兼容与便捷识别，不应承担高可信阻断判断。
 - Merkle 指纹支持 Git 批量哈希和跨会话缓存；预算超限仍会显式产生不完整证据并拒绝通过，大型仓库应根据指标调整规则分片与预算。
