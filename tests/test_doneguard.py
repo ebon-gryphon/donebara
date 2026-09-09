@@ -18,7 +18,17 @@ doneguard = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(doneguard)
 
 
-class DoneGuardTests(unittest.TestCase):
+class DonebaraTests(unittest.TestCase):
+    def test_followup_identity_never_uses_root_session_id(self) -> None:
+        root = "01a084e3-f2d1-7d30-8359-c5f3eb737713"
+        child = "01a0848b-2d56-7721-817e-a74991999b3f"
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": child}):
+            self.assertEqual(doneguard.followup_thread_id({"session_id": root}), child)
+            self.assertEqual(doneguard.followup_thread_id({"thread_id": root}), root)
+            self.assertIsNone(doneguard.followup_thread_id({"session_id": root}, use_environment=False))
+        with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}):
+            self.assertIsNone(doneguard.followup_thread_id({"session_id": root}))
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -29,7 +39,7 @@ class DoneGuardTests(unittest.TestCase):
         self.data.mkdir()
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         subprocess.run(["git", "-C", str(self.repo), "config", "user.email", "doneguard@example.test"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "DoneGuard Test"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "Donebara Test"], check=True)
         (self.repo / "app.py").write_text("def value():\n    return 1\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.repo), "add", "app.py"], check=True)
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "initial"], check=True)
@@ -187,7 +197,7 @@ class DoneGuardTests(unittest.TestCase):
         external.mkdir()
         subprocess.run(["git", "init", "-q", str(external)], check=True)
         subprocess.run(["git", "-C", str(external), "config", "user.email", "doneguard@example.test"], check=True)
-        subprocess.run(["git", "-C", str(external), "config", "user.name", "DoneGuard Test"], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.name", "Donebara Test"], check=True)
         target = external / "tool.py"
         target.write_text("VALUE = 1\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(external), "add", "tool.py"], check=True)
@@ -990,7 +1000,7 @@ class DoneGuardTests(unittest.TestCase):
         external.mkdir()
         subprocess.run(["git", "init", "-q", str(external)], check=True)
         subprocess.run(["git", "-C", str(external), "config", "user.email", "doneguard@example.test"], check=True)
-        subprocess.run(["git", "-C", str(external), "config", "user.name", "DoneGuard Test"], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.name", "Donebara Test"], check=True)
         target = external / "tool.py"
         target.write_text("VALUE = 1\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(external), "add", "tool.py"], check=True)
@@ -1015,7 +1025,7 @@ class DoneGuardTests(unittest.TestCase):
         external.mkdir()
         subprocess.run(["git", "init", "-q", str(external)], check=True)
         subprocess.run(["git", "-C", str(external), "config", "user.email", "doneguard@example.test"], check=True)
-        subprocess.run(["git", "-C", str(external), "config", "user.name", "DoneGuard Test"], check=True)
+        subprocess.run(["git", "-C", str(external), "config", "user.name", "Donebara Test"], check=True)
         target = external / "tool.py"
         target.write_text("VALUE = 1\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(external), "add", "tool.py"], check=True)

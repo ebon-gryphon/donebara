@@ -1,6 +1,6 @@
 ---
-name: doneguard
-description: Configure or explain Donebara completion checks for Codex. Use when the user mentions Donebara, 水豚验收官, or DoneGuard, asks whether Codex actually finished, wants a completion-evidence report, or wants to change its modes. Do not invoke for ordinary code review requests.
+name: donebara
+description: Configure or explain Donebara completion checks for Codex. Use when the user mentions Donebara, 水豚验收官, or Donebara, asks whether Codex actually finished, wants a completion-evidence report, or wants to change its modes. Do not invoke for ordinary code review requests.
 ---
 
 # Donebara
@@ -83,6 +83,8 @@ User-facing report bundles stay under `PLUGIN_DATA/reports/temporary` until the 
 Reports include a compact task summary and the current user prompt so completion evidence remains tied to the request it is meant to satisfy. The prompt is collapsed by default in the Companion and HTML report. Common credential shapes are redacted before persistence, and long prompts are truncated. Verification evidence should visibly include the redacted command, working directory, exit code, recorded time, and matching workspace fingerprint; unrelated exploratory shell commands are not report evidence.
 
 ## Interpreting reports
+
+The macOS report window includes a follow-up composer. Only the user's explicit Send action sends their prompt and report evidence to the exact original local Codex thread. The desktop owner starts the turn with inherited thread settings. Donebara captures `thread_id` separately from `session_id`; never route a fork through its root session ID. Older reports without an explicit thread ID cannot send. Busy or unavailable threads are not interrupted. An unconfirmed send is not automatically retried; direct the user to View Task before repeating it. This adapter uses versioned local desktop IPC and must fail visibly if a future Codex version is incompatible. HTML exports remain read-only.
 
 Treat Donebara findings as completion evidence, not proof of correctness. A passing report means relevant recorded checks succeeded after the most recent observed edit. It does not replace code review or guarantee that tests cover the requested behavior.
 

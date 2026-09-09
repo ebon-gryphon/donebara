@@ -139,12 +139,23 @@ def now_iso() -> str:
 
 
 def plugin_data_dir() -> Path:
-    raw = os.environ.get("PLUGIN_DATA") or os.environ.get("DONEGUARD_DATA")
+    raw = (
+        os.environ.get("PLUGIN_DATA")
+        or os.environ.get("DONEBARA_DATA")
+        or os.environ.get("DONEGUARD_DATA")
+    )
     if raw:
         path = Path(raw)
     else:
-        installed = Path.home() / ".codex" / "plugins" / "data" / "doneguard-personal"
-        path = installed if installed.exists() else Path.home() / ".codex" / "doneguard-data"
+        plugin_data = Path.home() / ".codex" / "plugins" / "data"
+        installed = plugin_data / "donebara-personal"
+        legacy_installed = plugin_data / "doneguard-personal"
+        if installed.exists():
+            path = installed
+        elif legacy_installed.exists():
+            path = legacy_installed
+        else:
+            path = Path.home() / ".codex" / "doneguard-data"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -206,6 +217,7 @@ def save_json(path: Path, value: Any) -> None:
 def new_state(event: dict[str, Any]) -> dict[str, Any]:
     return {
         "session_id": str(event.get("session_id") or "unknown"),
+        "thread_id": followup_thread_id(event),
         "cwd": str(event.get("cwd") or os.getcwd()),
         "started_at": now_iso(),
         "sequence": 0,
@@ -220,6 +232,16 @@ def new_state(event: dict[str, Any]) -> dict[str, Any]:
         "fingerprint_cache": {},
         "verifications": [],
     }
+
+
+def followup_thread_id(event: dict[str, Any], *, use_environment: bool = True) -> str | None:
+    """Only explicit thread identity; session IDs can refer to a fork's root."""
+    value = event.get("thread_id") or (os.environ.get("CODEX_THREAD_ID") if use_environment else None)
+    if isinstance(value, str) and re.fullmatch(
+        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value
+    ):
+        return value.lower()
+    return None
 
 
 def load_config(cwd: Path) -> tuple[dict[str, Any], list[str]]:
@@ -2213,6 +2235,8 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
         "schema_version": 3,
         "checked_at": now_iso(),
         "session_id": str(event.get("session_id") or state.get("session_id") or "unknown"),
+        "thread_id": followup_thread_id(event, use_environment=False) or state.get("thread_id"),
+        "host_id": "local",
         "turn_id": str(event.get("turn_id") or "unknown"),
         "cwd": str(cwd),
         "project_name": cwd.name or str(cwd),
@@ -2392,7 +2416,7 @@ h2{{margin:0 0 8px;font-size:17px}} ul{{margin:0;padding-left:21px}} li+li{{marg
 .task-summary{{margin:0;font-size:17px}} .prompt summary{{cursor:pointer}} .prompt pre,.evidence pre{{overflow:auto;white-space:pre-wrap;word-break:break-word;padding:10px;border-radius:10px;background:#e8efeb;color:var(--ink)}} .prompt pre{{max-height:320px}} .evidence-list{{display:grid;gap:10px}} .evidence{{padding:13px;border-radius:12px;background:#fff;border-left:4px solid var(--muted)}} .evidence.passed{{border-left-color:var(--green)}} .evidence.warning{{border-left-color:var(--amber)}} .evidence.issue{{border-left-color:var(--red)}} .evidence-title{{display:flex;justify-content:space-between;gap:12px}} .evidence-title span{{color:var(--muted)}} .evidence dl{{display:grid;grid-template-columns:max-content 1fr;gap:4px 10px;margin:8px 0 0;font-size:13px}} .evidence dt{{color:var(--muted)}} .evidence dd{{margin:0;word-break:break-all}}
 footer{{margin-top:26px;color:var(--muted);font-size:13px}}
 @media(max-width:640px){{main{{margin:0;padding:22px;border-radius:0}}.checks{{grid-template-columns:1fr}}}}
-</style></head><body><main><div class="eyebrow">DONEGUARD 完成检查报告</div><h1>{title} · {status_label}</h1>
+</style></head><body><main><div class="eyebrow">DONEBARA 完成检查报告</div><h1>{title} · {status_label}</h1>
 <div class="pill">{status_label}</div><h2>{html.escape(str(display.get("headline") or status_label))}</h2>
 <p class="summary">{html.escape(str(display.get("summary") or ""))}</p>
 <div class="meta">检查时间 {checked_at} · {html.escape(str(display.get("mode_label") or report.get("mode") or ""))}</div>
@@ -2583,6 +2607,8 @@ def _handle_hook_locked(event: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(state, dict):
         state = new_state(event)
     state["sequence"] = int(state.get("sequence") or 0) + 1
+    if followup_thread_id(event):
+        state["thread_id"] = followup_thread_id(event)
     state["cwd"] = str(event.get("cwd") or state.get("cwd") or os.getcwd())
 
     if hook_name == "UserPromptSubmit":

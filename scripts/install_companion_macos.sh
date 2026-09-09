@@ -2,8 +2,8 @@
 set -euo pipefail
 
 PLUGIN_SOURCE="${0:A:h:h}"
-DEFAULT_DATA_DIR="$(python3 -c 'from pathlib import Path; p=Path.home()/".codex"/"plugins"/"data"/"doneguard-personal"; print(p if p.exists() else Path.home()/".codex"/"doneguard-data")')"
-DATA_DIR="${PLUGIN_DATA:-${DONEGUARD_DATA:-$DEFAULT_DATA_DIR}}"
+DEFAULT_DATA_DIR="$(python3 -c 'from pathlib import Path; d=Path.home()/".codex"/"plugins"/"data"; p=d/"donebara-personal"; old=d/"doneguard-personal"; print(p if p.exists() else old if old.exists() else Path.home()/".codex"/"doneguard-data")')"
+DATA_DIR="${PLUGIN_DATA:-${DONEBARA_DATA:-${DONEGUARD_DATA:-$DEFAULT_DATA_DIR}}}"
 
 if [[ "${1:-}" == "--data-dir" ]]; then
   if [[ -z "${2:-}" ]]; then
@@ -21,14 +21,15 @@ TARGET_PATH="$DATA_DIR/$APP_NAME"
 
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources" "$DATA_DIR"
 swiftc -parse-as-library \
-  "$PLUGIN_SOURCE/companion/Sources/DoneGuardCompanion.swift" \
+  "$PLUGIN_SOURCE/companion/Sources/DonebaraCompanion.swift" \
   -framework AppKit -framework SwiftUI \
-  -o "$APP_PATH/Contents/MacOS/DoneGuardCompanion"
+  -o "$APP_PATH/Contents/MacOS/DonebaraCompanion"
 cp "$PLUGIN_SOURCE/companion/Support/Info.plist" "$APP_PATH/Contents/Info.plist"
 cp "$PLUGIN_SOURCE/companion/Assets/mascot-success.png" "$APP_PATH/Contents/Resources/mascot-success.png"
 cp "$PLUGIN_SOURCE/companion/Assets/mascot-issue.png" "$APP_PATH/Contents/Resources/mascot-issue.png"
+cp "$PLUGIN_SOURCE/scripts/donebara_followup.py" "$APP_PATH/Contents/Resources/donebara_followup.py"
 
-pkill -x DoneGuardCompanion 2>/dev/null || true
+pkill -x DonebaraCompanion 2>/dev/null || true
 
 if [[ -e "$TARGET_PATH" ]]; then
   BACKUP_DIR="$(mktemp -d "$DATA_DIR/companion-backup.XXXXXX")"

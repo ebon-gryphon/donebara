@@ -7,9 +7,9 @@
     <key>CFBundleDisplayName</key>
     <string>Donebara Companion</string>
     <key>CFBundleExecutable</key>
-    <string>DoneGuardCompanion</string>
+    <string>DonebaraCompanion</string>
     <key>CFBundleIdentifier</key>
-    <string>com.doneguard.companion</string>
+    <string>com.donebara.companion</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

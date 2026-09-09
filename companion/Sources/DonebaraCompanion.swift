@@ -2,10 +2,10 @@ import AppKit
 import SwiftUI
 
 extension Notification.Name {
-    static let doneGuardShowCompact = Notification.Name("DoneGuardShowCompact")
-    static let doneGuardShowDetails = Notification.Name("DoneGuardShowDetails")
-    static let doneGuardHide = Notification.Name("DoneGuardHide")
-    static let doneGuardHideDetails = Notification.Name("DoneGuardHideDetails")
+    static let donebaraShowCompact = Notification.Name("DonebaraShowCompact")
+    static let donebaraShowDetails = Notification.Name("DonebaraShowDetails")
+    static let donebaraHide = Notification.Name("DonebaraHide")
+    static let donebaraHideDetails = Notification.Name("DonebaraHideDetails")
 }
 
 struct DisplayCheck: Codable, Equatable, Identifiable {
@@ -80,6 +80,9 @@ struct VerificationEvidence: Codable, Equatable, Identifiable {
 
 struct CompletionReport: Codable, Identifiable, Equatable {
     let reportID: String
+    let threadID: String?
+    let hostID: String?
+    let cwd: String?
     let projectName: String
     let checkedAt: String
     let status: String
@@ -98,6 +101,9 @@ struct CompletionReport: Codable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case reportID = "report_id"
+        case threadID = "thread_id"
+        case hostID = "host_id"
+        case cwd
         case projectName = "project_name"
         case checkedAt = "checked_at"
         case status
@@ -240,7 +246,7 @@ final class ReportStore: ObservableObject {
         if report != nil {
             guard let presentedAt else {
                 // A hidden window or failed receipt must be retried, not dropped.
-                NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
+                NotificationCenter.default.post(name: .donebaraShowCompact, object: nil)
                 return
             }
             if Date().timeIntervalSince(presentedAt) < minimumDisplayTime { return }
@@ -282,14 +288,14 @@ final class ReportStore: ObservableObject {
             reportPath = candidate
             report = decoded
             errorMessage = nil
-            NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
+            NotificationCenter.default.post(name: .donebaraShowCompact, object: nil)
         } catch {
             errorMessage = "报告暂时无法打开：\(error.localizedDescription)"
             // Keep corrupt events for diagnosis, but never let one poison the queue.
             let failed = events.appendingPathComponent("failed", isDirectory: true)
             try? FileManager.default.createDirectory(at: failed, withIntermediateDirectories: true)
             try? FileManager.default.moveItem(at: eventURL, to: failed.appendingPathComponent(UUID().uuidString + ".json"))
-            NotificationCenter.default.post(name: .doneGuardShowCompact, object: nil)
+            NotificationCenter.default.post(name: .donebaraShowCompact, object: nil)
         }
     }
 
@@ -314,7 +320,7 @@ final class ReportStore: ObservableObject {
             presentedAt = Date()
             self.eventURL = nil
         } catch {
-            NSLog("DoneGuard presentation receipt failed: %@", error.localizedDescription)
+            NSLog("Donebara presentation receipt failed: %@", error.localizedDescription)
         }
     }
 
@@ -323,7 +329,7 @@ final class ReportStore: ObservableObject {
         detailReport = report
         detailReportPath = reportPath
         clearCompact()
-        NotificationCenter.default.post(name: .doneGuardShowDetails, object: nil)
+        NotificationCenter.default.post(name: .donebaraShowDetails, object: nil)
     }
 
     func showSummary() {
@@ -351,7 +357,7 @@ final class ReportStore: ObservableObject {
 
     func discardReport() {
         let bundle = detailReportPath?.deletingLastPathComponent()
-        NSLog("DoneGuard discard requested for %@", bundle?.lastPathComponent ?? "missing-report")
+        NSLog("Donebara discard requested for %@", bundle?.lastPathComponent ?? "missing-report")
         finish()
 
         guard let bundle else { return }
@@ -360,9 +366,9 @@ final class ReportStore: ObservableObject {
                 reportPath: bundle.appendingPathComponent("report.json"),
                 dataDirectory: dataDirectory
             )
-            NSLog("DoneGuard discarded temporary report %@", bundle.lastPathComponent)
+            NSLog("Donebara discarded temporary report %@", bundle.lastPathComponent)
         } catch {
-            NSLog("DoneGuard could not discard temporary report: %@", error.localizedDescription)
+            NSLog("Donebara could not discard temporary report: %@", error.localizedDescription)
             let alert = NSAlert()
             alert.messageText = "临时报告删除失败"
             alert.informativeText = error.localizedDescription
@@ -384,14 +390,14 @@ final class ReportStore: ObservableObject {
         deliveryToken = nil
         presentedAt = nil
         errorMessage = nil
-        NotificationCenter.default.post(name: .doneGuardHide, object: nil)
+        NotificationCenter.default.post(name: .donebaraHide, object: nil)
     }
 
     func finish() {
         detailReport = nil
         detailReportPath = nil
         errorMessage = nil
-        NotificationCenter.default.post(name: .doneGuardHideDetails, object: nil)
+        NotificationCenter.default.post(name: .donebaraHideDetails, object: nil)
     }
 }
 
@@ -691,8 +697,114 @@ struct FindingSection: View {
     }
 }
 
+struct FollowupResult: Decodable {
+    let status: String
+    let message: String
+}
+
+enum FollowupSender {
+    static func send(report: CompletionReport, prompt: String, dataDirectory: URL) async -> FollowupResult {
+        await Task.detached(priority: .userInitiated) {
+            guard let helper = Bundle.main.url(forResource: "donebara_followup", withExtension: "py") else {
+                return FollowupResult(status: "error", message: "发送组件尚未安装，请更新 Donebara。")
+            }
+            let process = Process()
+            let input = Pipe()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = [helper.path, "--data-dir", dataDirectory.path]
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            do {
+                let reportObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(report))
+                let payload = try JSONSerialization.data(withJSONObject: ["report": reportObject, "prompt": prompt])
+                try process.run()
+                try input.fileHandleForWriting.write(contentsOf: payload)
+                try input.fileHandleForWriting.close()
+                let result = output.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                return try JSONDecoder().decode(FollowupResult.self, from: result)
+            } catch {
+                return FollowupResult(status: process.processIdentifier == 0 ? "error" : "uncertain",
+                    message: "发送未能确认，请查看原任务后再操作。")
+            }
+        }.value
+    }
+}
+
+struct FollowupComposer: View {
+    let report: CompletionReport
+    let dataDirectory: URL
+    @State private var prompt = ""
+    @State private var sending = false
+    @State private var result: FollowupResult?
+    @State private var submittedPrompt: String?
+
+    private var targetURL: URL? {
+        guard report.hostID == "local", let id = report.threadID, UUID(uuidString: id) != nil else { return nil }
+        return URL(string: "codex://threads/\(id)")
+    }
+    private var trimmedPrompt: String { prompt.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var alreadySubmitted: Bool {
+        submittedPrompt == trimmedPrompt && (result?.status == "sent" || result?.status == "uncertain")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Label("让原任务继续处理", systemImage: "text.bubble").font(.headline)
+                Spacer()
+                if let url = targetURL {
+                    Button("查看任务") { NSWorkspace.shared.open(url) }.buttonStyle(.link)
+                }
+            }
+            if targetURL == nil {
+                Text("这份旧报告没有准确的原任务标识，请在原任务重新生成报告后使用。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                TextField("例如：请检查测试失败的原因并修复", text: $prompt, axis: .vertical)
+                    .lineLimit(2...4)
+                    .textFieldStyle(.plain)
+                    .padding(10)
+                    .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+                    .disabled(sending)
+                    .accessibilityLabel("给原任务的处理要求")
+                HStack {
+                    Text("会附上本报告的异常和验证结果")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    if sending { ProgressView().controlSize(.small) }
+                    Button(sending ? "正在发送…" : "发送到原任务并执行") {
+                        let text = trimmedPrompt
+                        sending = true
+                        result = nil
+                        submittedPrompt = text
+                        Task {
+                            result = await FollowupSender.send(report: report, prompt: text, dataDirectory: dataDirectory)
+                            sending = false
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(sending || trimmedPrompt.isEmpty || trimmedPrompt.count > 8000 || alreadySubmitted)
+                }
+                if let result {
+                    Text(result.message)
+                        .font(.caption)
+                        .foregroundStyle(result.status == "sent" ? Color.green : Color.orange)
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color.accentColor.opacity(0.06))
+    }
+}
+
 struct DetailView: View {
     let report: CompletionReport
+    let dataDirectory: URL
     let back: () -> Void
     let save: () -> Void
     let discard: () -> Void
@@ -764,6 +876,10 @@ struct DetailView: View {
                 .padding(24)
             }
 
+            Divider()
+            FollowupComposer(report: report, dataDirectory: dataDirectory)
+                .id(report.reportID)
+            Divider()
             HStack {
                 Button(role: .destructive, action: discard) {
                     Label("关闭且不保存", systemImage: "trash")
@@ -795,6 +911,7 @@ struct ContentView: View {
             if details, let report = store.detailReport {
                     DetailView(
                         report: report,
+                        dataDirectory: store.dataDirectory,
                         back: store.showSummary,
                         save: store.saveReport,
                         discard: store.discardReport
@@ -854,23 +971,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(showCompact),
-            name: .doneGuardShowCompact,
+            name: .donebaraShowCompact,
             object: nil
         )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(showDetails),
-            name: .doneGuardShowDetails,
+            name: .donebaraShowDetails,
             object: nil
         )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(hidePanel),
-            name: .doneGuardHide,
+            name: .donebaraHide,
             object: nil
         )
         NotificationCenter.default.addObserver(
-            self, selector: #selector(hideDetails), name: .doneGuardHideDetails, object: nil
+            self, selector: #selector(hideDetails), name: .donebaraHideDetails, object: nil
         )
         // App-owned timer continues when every SwiftUI window is hidden/closed.
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -964,9 +1081,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
-#if !DONEGUARD_TESTING
+#if !DONEBARA_TESTING
 @main
-struct DoneGuardCompanionApp: App {
+struct DonebaraCompanionApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {

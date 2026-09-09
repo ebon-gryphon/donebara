@@ -8,6 +8,12 @@
 
 当前版本默认保护 Git 仓库，也会保护全局 Skill、插件和 Codex CLI 配置；非 Git 目录可以通过 `.doneguard.json` 显式启用。默认模式为 `warn`，它会展示报告，但不会阻止任务结束。
 
+完整报告底部支持输入处理要求，例如“请检查测试失败的原因并修复”，点击 **发送到原任务并执行** 后，会附上本报告的问题与验证结果，并在原来的本机 Codex 任务中开始新一轮处理。点击 **查看任务** 可以回到该任务，模型和权限沿用任务设置。
+
+此功能通过带版本检查的本地桌面通信通道连接原任务，需要 Codex 已打开、原任务已加载且处于空闲状态。任务仍在执行时不会被中断；连接失败会显示提示；发送结果不确定时不会自动重试。同一报告的相同要求确认发送后不会重复提交。发送回执保存在 `PLUGIN_DATA/followups`，仅包含标识和状态，不保存输入正文。
+
+新报告单独记录准确的 `thread_id`。只有 `session_id` 的旧报告不能发送，以免将分叉任务发回根任务；请在原任务重新生成报告。HTML 导出仍为只读。更新 Companion 后需重新运行 `scripts/install_companion_macos.sh`，将发送组件一同安装。
+
 水豚验收官以“本轮是否修改了受保护的工程资产”为触发条件。只读问答、新闻搜索和资料查询不会因为工作区里早先遗留的未提交改动而生成新报告。同一个工作区指纹和问题状态只通知一次，内容或验证状态变化后才会再次通知。
 
 每次用户提示开始时，水豚验收官会同时记录 Git 脏文件内容状态和当时生效的项目规则。补丁修改与后续脚本生成的文件会在停止前合并检查；同一轮涉及多个受保护仓库时，一处仓库的成功命令不能替其他仓库提供完成证据。若本轮修改 `.doneguard.json`，新规则从后续轮次生效，本轮仍使用提示开始时的规则，避免检查过程被同一轮改动意外关闭。
@@ -27,7 +33,7 @@
 ```text
 请帮我安装水豚验收官（Donebara）。
 项目地址是 https://github.com/ebon-gryphon/donebara
-请把项目下载到 ~/plugins/doneguard，加入我的 Personal marketplace，安装插件，并在 macOS 上安装 Companion。完成后请检查是否安装成功，并告诉我结果。
+请把项目下载到 ~/plugins/donebara，加入我的 Personal marketplace，安装插件，并在 macOS 上安装 Companion。完成后请检查是否安装成功，并告诉我结果。
 ```
 
 看到安装成功的回复以后，再新建一个任务。水豚验收官会从新任务开始工作。
@@ -51,8 +57,8 @@
 如果你只是想使用水豚验收官，可以跳过这一节。下面的命令只适合已经把水豚验收官加入本机 Personal marketplace，并且熟悉终端的用户。
 
 ```bash
-codex plugin add doneguard@personal
-zsh /path/to/doneguard/scripts/install_companion_macos.sh
+codex plugin add donebara@personal
+zsh /path/to/donebara/scripts/install_companion_macos.sh
 ```
 
 ## 它解决什么问题
@@ -241,7 +247,7 @@ python3 <plugin-root>/scripts/doneguard.py status --cwd <project-root> --json
 Companion 是独立于项目目录的轻量 SwiftUI 应用。源码安装会在水豚验收官的插件数据目录中构建 `Donebara Companion.app`，不会向用户的代码仓库写入报告文件。
 
 ```bash
-zsh /path/to/doneguard/scripts/install_companion_macos.sh
+zsh /path/to/donebara/scripts/install_companion_macos.sh
 ```
 
 工作流程如下。
@@ -257,8 +263,8 @@ zsh /path/to/doneguard/scripts/install_companion_macos.sh
 需要脚本化管理临时报告时可以使用下面的命令。
 
 ```bash
-python3 /path/to/doneguard/scripts/doneguard.py report-action save <report-id>
-python3 /path/to/doneguard/scripts/doneguard.py report-action discard <report-id>
+python3 /path/to/donebara/scripts/doneguard.py report-action save <report-id>
+python3 /path/to/donebara/scripts/doneguard.py report-action discard <report-id>
 ```
 
 ## 开发验证
@@ -266,7 +272,7 @@ python3 /path/to/doneguard/scripts/doneguard.py report-action discard <report-id
 插件本身只依赖 Python 标准库。
 
 ```bash
-cd /path/to/doneguard
+cd /path/to/donebara
 python3 -m unittest -v tests/test_doneguard.py
 python3 -m py_compile scripts/doneguard.py
 ```
