@@ -1,6 +1,6 @@
 {
   "name": "donebara",
-  "version": "0.1.0+codex.20260909072729",
+  "version": "0.1.0+codex.20260910063104",
   "description": "Verify completion evidence and optionally show it in a macOS capybara companion.",
   "author": {
     "name": "\u661f\u6602"

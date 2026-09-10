@@ -19,6 +19,28 @@ SPEC.loader.exec_module(doneguard)
 
 
 class DonebaraTests(unittest.TestCase):
+    def test_donebara_config_opts_non_git_directory_in(self) -> None:
+        plain = self.root / "desktop"
+        nested = plain / "source"
+        nested.mkdir(parents=True)
+        (plain / ".donebara.json").write_text('{"mode":"warn"}')
+        self.assertEqual(doneguard.scope_for_path(nested / "main.swift"), ("configured", plain.resolve()))
+        self.assertEqual(doneguard.load_config(nested)[0]["mode"], "warn")
+
+    def test_donebara_config_precedes_legacy(self) -> None:
+        (self.repo / ".doneguard.json").write_text('{"mode":"observe"}')
+        (self.repo / ".donebara.json").write_text('{"mode":"strict"}')
+        config, warnings = doneguard.load_config(self.repo)
+        self.assertEqual(config["mode"], "strict")
+        self.assertEqual(warnings, [])
+
+    def test_invalid_donebara_does_not_fall_back_to_legacy(self) -> None:
+        (self.repo / ".doneguard.json").write_text('{"mode":"observe"}')
+        (self.repo / ".donebara.json").write_text('{bad-json}')
+        config, warnings = doneguard.load_config(self.repo)
+        self.assertEqual(config["mode"], "warn")
+        self.assertIn("Invalid .donebara.json", warnings[0])
+
     def test_followup_identity_never_uses_root_session_id(self) -> None:
         root = "01a084e3-f2d1-7d30-8359-c5f3eb737713"
         child = "01a0848b-2d56-7721-817e-a74991999b3f"
@@ -1073,6 +1095,36 @@ class DonebaraTests(unittest.TestCase):
         doneguard.handle_hook(self.event(
             "PostToolUse", tool_name="apply_patch",
             tool_input={"command": "*** Update File: app.py\n*** Update File: .doneguard.json"},
+        ))
+        result = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
+        self.assertEqual(result.get("decision"), "block")
+        report = doneguard.latest_report(self.repo)
+        self.assertEqual(report["mode"], "strict")
+        self.assertTrue(any("configuration changed" in item for item in report["warnings"]))
+
+    def test_donebara_config_cannot_disable_guard_during_same_turn(self) -> None:
+        strict = {
+            "schema_version": 3,
+            "mode": "strict",
+            "verification_commands": [{
+                "id": "required-tests", "kind": "test", "argv": ["pytest"],
+                "required": True, "when_changed": ["app.py"],
+                "fingerprint_paths": ["app.py"],
+            }],
+        }
+        (self.repo / ".donebara.json").write_text(json.dumps(strict) + "\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", ".donebara.json"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "strict config"], check=True)
+        doneguard.handle_hook(self.event("SessionStart", source="startup"))
+        doneguard.handle_hook(self.event("UserPromptSubmit", prompt="edit and disable guard"))
+        (self.repo / "app.py").write_text("def value():\n    return 2\n", encoding="utf-8")
+        (self.repo / ".donebara.json").write_text(
+            '{"mode":"observe","require_verification_when_code_changed":false}\n',
+            encoding="utf-8",
+        )
+        doneguard.handle_hook(self.event(
+            "PostToolUse", tool_name="apply_patch",
+            tool_input={"command": "*** Update File: app.py\n*** Update File: .donebara.json"},
         ))
         result = doneguard.handle_hook(self.event("Stop", stop_hook_active=False))
         self.assertEqual(result.get("decision"), "block")

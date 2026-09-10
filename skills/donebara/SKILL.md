@@ -7,13 +7,15 @@ description: Configure or explain Donebara completion checks for Codex. Use when
 
 Donebara is a local completion guard for Git projects and protected Codex engineering assets. Its hooks record supported verification commands and inspect changes from the current user turn before Codex stops. Successful verification is tied to a fingerprint of the relevant changed content, so later edits invalidate older evidence regardless of which editing tool produced them.
 
-At prompt start, Donebara snapshots the current Git dirty-path state and the effective project policy. Shell-generated files are merged with explicitly patched paths before evidence is evaluated. If one turn touches more than one protected repository or global scope, a successful command from one scope must not certify the others; report the additional scopes as needing separate verification. A `.doneguard.json` edit takes effect for later turns, while the prompt-start policy remains authoritative for the turn that edits it so the guard cannot disable itself mid-turn.
+At prompt start, Donebara snapshots the current Git dirty-path state and the effective project policy. Shell-generated files are merged with explicitly patched paths before evidence is evaluated. If one turn touches more than one protected repository or global scope, a successful command from one scope must not certify the others; report the additional scopes as needing separate verification. A `.donebara.json` edit takes effect for later turns, while the prompt-start policy remains authoritative for the turn that edits it so the guard cannot disable itself mid-turn.
 
-Read-only turns must stay silent even when the current Git repository already contains unrelated dirty files. A report is eligible only when the current turn changes a protected scope or runs verification for one. Protected scopes are Git repositories, non-Git directories explicitly opted in with `.doneguard.json`, global Codex skills/plugins/bin/configuration under `CODEX_HOME`, and global agent skills/plugins under `~/.agents`. Determine the scope from the edited files rather than assuming every edit belongs to the chat's starting directory. Identical workspace findings should not notify repeatedly until the fingerprint or findings change.
+Read-only turns must stay silent even when the current Git repository already contains unrelated dirty files. A report is eligible only when the current turn changes a protected scope or runs verification for one. Protected scopes are Git repositories, non-Git directories explicitly opted in with `.donebara.json`, global Codex skills/plugins/bin/configuration under `CODEX_HOME`, and global agent skills/plugins under `~/.agents`. Determine the scope from the edited files rather than assuming every edit belongs to the chat's starting directory. Identical workspace findings should not notify repeatedly until the fingerprint or findings change.
+
+The legacy `.doneguard.json` filename remains supported. If both files exist in the same project root, `.donebara.json` takes precedence; they are not merged. Both names count as policy edits for prompt-start protection. New configurations must use `.donebara.json`.
 
 ## Modes
 
-Read `.doneguard.json` from the project root when it exists. The default mode is `warn`.
+Read `.donebara.json` from the project root when it exists. The default mode is `warn`.
 
 - `observe`: save reports without interrupting the chat.
 - `warn`: show a completion report but allow the turn to finish.
@@ -21,7 +23,7 @@ Read `.doneguard.json` from the project root when it exists. The default mode is
 
 When the optional macOS Companion is installed, `warn` and the final `strict` stop deliver the report outside the project as a compact, non-activating upper-right notification. Keep the capybara beside the actions instead of making it the main content. Only the user's explicit View Report action should open a centered, focused report window. If Companion cannot be launched, preserve the inline `systemMessage` fallback. Never describe the first strict continuation as task completion.
 
-When the user asks to change modes, create or update `.doneguard.json` while preserving unrelated fields:
+When the user asks to change modes, create or update `.donebara.json` while preserving unrelated fields:
 
 ```json
 {

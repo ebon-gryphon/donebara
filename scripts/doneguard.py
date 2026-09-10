@@ -3,7 +3,7 @@
 
 Uses only the Python standard library. Hook state and reports live under
 PLUGIN_DATA so the guarded repository stays clean unless a user explicitly
-adds a .doneguard.json configuration file.
+adds a .donebara.json configuration file (.doneguard.json remains compatible).
 """
 
 from __future__ import annotations
@@ -28,6 +28,14 @@ import tokenize
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
+
+
+CONFIG_FILENAMES = (".donebara.json", ".doneguard.json")
+
+
+def project_config_path(root: Path) -> Path:
+    """Prefer the public Donebara name while retaining legacy projects."""
+    return next((root / name for name in CONFIG_FILENAMES if (root / name).exists()), root / CONFIG_FILENAMES[0])
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -258,21 +266,21 @@ def load_config(cwd: Path) -> tuple[dict[str, Any], list[str]]:
         "verification_commands": [],
     }
     root = guard_root(cwd)
-    config_path = root / ".doneguard.json"
+    config_path = project_config_path(root)
     try:
         raw = json.loads(config_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return config, warnings
     except json.JSONDecodeError as exc:
-        return config, [f"Invalid .doneguard.json: {exc.msg} at line {exc.lineno}, column {exc.colno}; defaults were used."]
+        return config, [f"Invalid {config_path.name}: {exc.msg} at line {exc.lineno}, column {exc.colno}; defaults were used."]
     except OSError as exc:
-        return config, [f"Could not read .doneguard.json: {exc}; defaults were used."]
+        return config, [f"Could not read {config_path.name}: {exc}; defaults were used."]
     if not isinstance(raw, dict):
-        return config, [".doneguard.json must contain a JSON object; defaults were used."]
+        return config, [f"{config_path.name} must contain a JSON object; defaults were used."]
 
     unknown = sorted(set(raw) - set(DEFAULT_CONFIG))
     if unknown:
-        warnings.append("Unknown .doneguard.json field(s): " + ", ".join(unknown))
+        warnings.append(f"Unknown {config_path.name} field(s): " + ", ".join(unknown))
     config.update(raw)
 
     if config.get("schema_version") not in {1, 2, 3}:
@@ -467,7 +475,7 @@ def explicit_config_root(cwd: Path) -> Path | None:
     """Find the nearest opt-in root for a directory that is not in Git."""
     current = cwd if cwd.is_dir() else cwd.parent
     for candidate in (current, *current.parents):
-        if (candidate / ".doneguard.json").is_file():
+        if any((candidate / name).is_file() for name in CONFIG_FILENAMES):
             return candidate
     return None
 
@@ -1953,7 +1961,7 @@ def plain_finding(message: str, category: str) -> dict[str, str]:
         return {
             "title": "部分代码改动没有对应的必做检查",
             "detail": "项目设置了必须运行的验证规则，但这些改动没有被任何规则覆盖。",
-            "next_step": "请补充或调整 .doneguard.json 中的验证覆盖范围。",
+            "next_step": "请补充或调整 .donebara.json 中的验证覆盖范围。",
             "technical_detail": message.split(": ", 1)[1],
         }
     if " coverage (" in message:
@@ -2059,7 +2067,7 @@ def evaluate(event: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | N
     scope_kind = str(scope["kind"])
     raw_paths = [path for path in scope["paths"] if isinstance(path, str)]
     config, config_warnings = runtime_config(cwd, scope_kind)
-    config_changed = ".doneguard.json" in raw_paths
+    config_changed = bool(set(CONFIG_FILENAMES).intersection(raw_paths))
     baselines = state.get("turn_config_baselines", {})
     baseline_entry = baselines.get(str(cwd.resolve(strict=False))) if isinstance(baselines, dict) else None
     if config_changed and isinstance(baseline_entry, dict):
